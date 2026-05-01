@@ -31,6 +31,7 @@ That's the whole flow. ~50 lines of glue wires it into axum/actix/anything — s
 - ✅ Auto-signup at first verify (or plug your own `UserResolver`)
 - ✅ Audit-log hook (`SessionEventSink`)
 - ✅ Cleanup helper for old rows (`store::cleanup_expired`)
+- ✅ Built-in `tracing` spans + structured events (logs/traces correlate out-of-box with [`rust_telemetry`](https://github.com/zygmunt-pawel/rust_telemetry))
 
 **Not included** (out of scope by design): passwords, OAuth/2FA, JWT, HTTP routing, mailer queue, CAPTCHA. The library deliberately doesn't read environment variables — you pass strings in.
 
@@ -75,7 +76,7 @@ Wire three handlers (axum example):
 | `POST /auth/verify` | `store::verify_magic_link_or_code(pool, input, ip, ua, resolver, cfg, sink)` |
 | `POST /auth/logout` | `store::delete_session(pool, cookie_header, cfg, sink)` |
 
-For protected routes wrap them with middleware that calls `store::authenticate_session(...)` and injects `AuthenticatedUser` into request extensions. Run `store::cleanup_expired(&pool).await?` from a daily cron.
+For protected routes wrap them with middleware that calls `store::authenticate_session(...)` and injects `AuthenticatedUser` into request extensions. Run `store::cleanup_expired(&pool).await?` from a daily cron. All public ops are `#[tracing::instrument]`-wrapped — pipe `tracing-subscriber` somewhere (or use [`rust_telemetry`](https://github.com/zygmunt-pawel/rust_telemetry)) and you'll see structured spans/events out of the box.
 
 ---
 
@@ -225,16 +226,13 @@ All state in Postgres. Two app instances with same `DATABASE_URL` + same pepper 
 
 ### Cleanup
 
-`magic_links` rows accumulate. Run nightly:
+`magic_links` rows accumulate. Run nightly (e.g. `pg_cron` or sidecar):
 
 ```rust
 let report = auth_rust::store::cleanup_expired(&pool).await?;
-tracing::info!(
-    magic_links = report.magic_links_deleted,
-    sessions    = report.sessions_deleted,
-    verify_attempts = report.verify_attempts_deleted,
-    "auth cleanup",
-);
+// report.{magic_links_deleted, sessions_deleted, verify_attempts_deleted, total()}
+// The function emits its own `tracing::info!` with the counts — your `tracing-subscriber`
+// picks it up. No extra logging code needed.
 ```
 
 Hardcoded sensible windows: `magic_links` older than 7 days (preserves the 24h lockout window + forensics buffer), `sessions` past `absolute_expires_at`, `auth_verify_attempts` older than 5 min.
