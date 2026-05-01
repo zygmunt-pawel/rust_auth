@@ -54,7 +54,7 @@ async fn verify_rate_check_ip(pool: &PgPool, ip: IpAddr, cfg: &AuthConfig) -> Re
     let _ = sqlx::query("DELETE FROM auth_verify_attempts WHERE attempted_at < NOW() - INTERVAL '5 minutes'")
         .execute(pool).await;
 
-    Ok(count <= cfg.verify_per_ip_per_min_cap as i64)
+    Ok(count < cfg.verify_per_ip_per_min_cap as i64)
 }
 
 async fn verify_by_token(

@@ -44,6 +44,10 @@ let (session_token, _user_id) = store::verify_magic_link_or_code(
 ).await?;
 ```
 
+## Prerequisites
+
+- **Postgres 18+** — the migrations use the built-in `uuidv7()` function. On Postgres 16/17 you'd need the `pg_uuidv7` extension installed by your DBA before running the library migrator.
+
 ## Pepper generation
 
 ```bash

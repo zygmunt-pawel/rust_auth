@@ -47,14 +47,14 @@ async fn authenticate_with_expired_session_returns_unauthorized(pool: sqlx::PgPo
 }
 
 #[sqlx::test]
-async fn authenticate_within_refresh_window_rotates_token(pool: sqlx::PgPool) {
+async fn authenticate_within_refresh_window_refreshes_in_place(pool: sqlx::PgPool) {
     let (cookie, _user_id) = login_and_get_cookie(&pool).await;
     sqlx::query("UPDATE sessions SET expires_at = NOW() + INTERVAL '12 hours'").execute(&pool).await.unwrap();
     let cfg = test_config();
     let sink = CapturingSink::new();
     let (_user, set_cookie) = auth_rust::store::authenticate_session(&pool, Some(&cookie), &cfg, &*sink).await.unwrap();
-    assert!(set_cookie.is_some(), "should re-emit Set-Cookie after rotation");
-    assert_eq!(sink.count(), 1, "rotation event emitted");
+    assert!(set_cookie.is_some(), "should re-emit Set-Cookie after in-place refresh");
+    assert_eq!(sink.count(), 1, "Refreshed event emitted");
 }
 
 #[sqlx::test]

@@ -66,7 +66,6 @@ pub struct AuthConfig {
     pub issue_per_ip_24h_cap: u32,
     pub verify_per_ip_per_min_cap: u32,
     pub code_failures_per_email_24h_cap: u32,
-    pub email_lockout_duration: Duration,
 
     pub token_pepper: Pepper,
 
@@ -92,7 +91,6 @@ impl AuthConfig {
             issue_per_ip_24h_cap: 30,
             verify_per_ip_per_min_cap: 30,
             code_failures_per_email_24h_cap: 50,
-            email_lockout_duration: Duration::from_secs(60 * 60),
 
             token_pepper,
 

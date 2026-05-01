@@ -65,7 +65,7 @@ pub async fn authenticate_session(
     .bind(to_interval(cfg.session_refresh_threshold))
     .fetch_optional(pool).await?;
 
-    let (session_id, user_id, user_public_id, email, needs_refresh, absolute_expires_at) = match row {
+    let (session_id, user_id, user_public_id, email, needs_refresh, _absolute_expires_at) = match row {
         Some(r) => r,
         None => return Err(AuthError::Unauthorized),
     };
@@ -81,38 +81,30 @@ pub async fn authenticate_session(
         return Ok((user, None));
     }
 
-    // Rotation on refresh: insert new session, delete old, return new cookie value.
-    // Preserve absolute_expires_at from the old session.
-    let new_token = SessionToken::generate();
-    let new_hash = hmac_sha256_hex(&cfg.token_pepper, new_token.as_str());
-    let new_id: (i64,) = sqlx::query_as(
-        "INSERT INTO sessions
-            (session_token_hash, user_id, expires_at, absolute_expires_at, user_agent, ip,
-             last_seen_at)
-         SELECT $1, user_id, LEAST(NOW() + $2, $3), $3, user_agent, ip, NOW()
-         FROM sessions WHERE id = $4
-         RETURNING id"
+    // Atomic in-place refresh — only the first concurrent request wins.
+    let updated: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
+        "UPDATE sessions
+         SET expires_at = LEAST(NOW() + $1, absolute_expires_at),
+             last_seen_at = NOW()
+         WHERE id = $2
+           AND expires_at < NOW() + $3
+         RETURNING expires_at"
     )
-    .bind(&new_hash)
     .bind(to_interval(cfg.session_sliding_ttl))
-    .bind(absolute_expires_at)
     .bind(session_id)
-    .fetch_one(pool).await?;
+    .bind(to_interval(cfg.session_refresh_threshold))
+    .fetch_optional(pool).await?;
 
-    sqlx::query("DELETE FROM sessions WHERE id = $1").bind(session_id).execute(pool).await?;
-
-    sink.on_event(SessionEvent::Rotated {
-        old_session_id: session_id,
-        new_session_id: new_id.0,
-        user_id,
-    }).await;
-
-    let cookie = session_cookie_header_value(&new_token, cfg);
-    let user = AuthenticatedUser {
-        session_id: new_id.0,
-        ..user
-    };
-    Ok((user, Some(cookie)))
+    if updated.is_some() {
+        sink.on_event(SessionEvent::Refreshed { session_id, user_id }).await;
+        // Re-emit Set-Cookie so browser-side expiry stays in sync.
+        // The TOKEN value is unchanged — we just bump Max-Age.
+        let token_plain_for_cookie = SessionToken::from_string(plaintext.to_string());
+        let cookie = session_cookie_header_value(&token_plain_for_cookie, cfg);
+        return Ok((user, Some(cookie)));
+    }
+    // If updated was None, another request beat us to the refresh — that's fine, session is valid.
+    Ok((user, None))
 }
 
 pub async fn delete_session(
