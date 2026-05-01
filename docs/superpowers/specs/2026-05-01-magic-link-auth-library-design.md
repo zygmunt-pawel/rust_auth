@@ -25,16 +25,28 @@ bezpieczeństwa** (no-knob na rzeczach security-critical).
 - ❌ Bez haseł, account lockout, change-password, email-verification, 2FA, OAuth,
       pwned-check — wszystko OUT z v1
 
-## Architektura — biblioteka eksportuje **funkcje + middleware**, nie routy
+## Architektura — biblioteka eksportuje **tylko funkcje**, transport-agnostic
 
-Trzy publiczne moduły, jedna paczka, axum opcjonalny (default-on).
+Dwa publiczne moduły, jedna paczka, **zero feature flag, zero zależności od
+frameworka HTTP**. Konsument wpina funkcje w swoje handlery / middleware.
 
 ### `auth_rust::core` — czyste, transport-agnostic
 - typy: `Email`, `MagicLinkToken`, `VerifyCode`, `SessionToken`, `UserId(i64)`,
-  `User { id, public_id, email, status, created_at }`, `ActiveSession`, `AuthError`
+  `User { id, public_id, email, status, created_at }`, `ActiveSession`,
+  `AuthenticatedUser { id, public_id, email, session_id }`, `AuthError`
 - traity: `Mailer`, `UserResolver` (z domyślnym `AutoSignupResolver`)
 - konfig: `AuthConfig { magic_link_ttl, code_ttl, session_sliding_ttl,
   session_absolute_ttl, refresh_threshold, cookie_name, cookie_domain }`
+- helpery framework-agnostic (zwracają `String` / `u16`, nie axum types):
+  - `pub fn session_cookie_header_value(token, cfg) -> String` —
+    `"<name>=<value>; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=<ttl>"`,
+    flagi wymuszone (HttpOnly/Secure/SameSite=Lax — no knob)
+  - `pub fn session_cookie_clear_header_value(cfg) -> String` — wartość
+    `Set-Cookie` do logoutu (Max-Age=0)
+  - `impl AuthError { pub fn http_status(&self) -> u16 }` — mapping na status
+    (`Unauthorized`/`InvalidToken`/`TokenExpired`/`TokenReused` → 401;
+    `RateLimited` → 429; `Internal` → 500). Konsument woła w swoim
+    `IntoResponse`/równoważniku, biblioteka nie zna axum.
 - **deps**: `serde`, `thiserror`, `tracing`, `uuid`. Zero DB/HTTP.
 
 ### `auth_rust::store` — high-level operacje na `&PgPool` (security-enforced)
@@ -46,8 +58,10 @@ pub async fn issue_magic_link(
     cfg: &AuthConfig,
     mailer: &impl Mailer,
 ) -> Result<(), AuthError>;
-// W środku: constant-time pad, rate limit per-email + per-IP, generacja
-// dwóch sekretów, INSERT, wywołanie Mailer.
+// W środku: constant-time pad 100ms (wbudowany), rate limit per-email +
+// per-IP, generacja dwóch sekretów (token sha256 + kod argon2id), INSERT,
+// wywołanie Mailer; pierwsza próba sync, Retryable → tokio::spawn z
+// exp-backoff (3 próby), Permanent → propagacja.
 
 pub async fn verify_magic_link_or_code(
     pool: &PgPool,
@@ -61,21 +75,19 @@ pub async fn verify_magic_link_or_code(
 // code_attempts, automatyczne unieważnienie po 5 nieudanych, mark used_at,
 // resolver.resolve_or_create, create session, return token + user_id.
 
-pub async fn lookup_session(
+pub async fn authenticate_session(
     pool: &PgPool,
-    token: &SessionToken,
+    cookie_value: Option<&str>,           // surowa wartość cookie z requestu
     cfg: &AuthConfig,
-) -> Result<Option<ActiveSession>, AuthError>;
-
-pub async fn refresh_session_expiry(
-    pool: &PgPool,
-    session_id: i64,
-    cfg: &AuthConfig,
-) -> Result<(), AuthError>;
+) -> Result<AuthenticatedUser, AuthError>;
+// JEDYNY helper potrzebny do konsumenckich middleware. Parsuje wartość
+// cookie → SessionToken, robi lookup, auto-refresh sliding TTL gdy
+// needs_refresh, zwraca AuthenticatedUser albo AuthError::Unauthorized.
+// Konsument: jedna linijka w swoim middleware.
 
 pub async fn delete_session(
     pool: &PgPool,
-    token: &SessionToken,
+    cookie_value: Option<&str>,
 ) -> Result<Option<UserId>, AuthError>;
 
 pub async fn lookup_user_by_id(
@@ -86,24 +98,15 @@ pub async fn lookup_user_by_id(
 pub fn migrator() -> sqlx::migrate::Migrator;
 ```
 
-**Hard deps**: `sqlx` (Postgres), `sha2`, `rand`, `base64`, `argon2`, `uuid`.
+**Hard deps**: `sqlx` (Postgres), `sha2`, `rand`, `base64`, `argon2`, `uuid`,
+`tokio` (do `spawn` retry).
 
-### `auth_rust::axum` — middleware + extractor + IntoResponse (feature `axum`, default-on)
+### Brak `auth_rust::axum` / `auth_rust::actix` / żadnego frameworkowego modułu
 
-**Tylko building blocks**, zero handlerów / routów:
-- `pub async fn constant_time(req, next) -> Response` — fn middleware z 100ms deadline
-- `pub async fn stash_client_ip(req, next) -> Response` — wstrzykuje TrustedIp z `axum-client-ip`
-- `pub async fn require_session(State, req, next) -> Response` — czyta cookie, woła
-  `lookup_session`, jeśli `None` → 401, jeśli `Some` → wstrzykuje `AuthUser(i64)` do
-  request extensions, idzie dalej; auto-refresh sliding TTL gdy `needs_refresh`
-- `pub struct AuthUser(pub i64)` — extractor, kompilator-enforced "tu jest zalogowany user"
-- `pub fn build_session_cookie(token: &SessionToken, cfg: &AuthConfig) -> CookieJar` —
-  HttpOnly + Secure + SameSite=Lax + Path=/, no-knob na flagi
-- `impl IntoResponse for AuthError` — opaque body, status mapping (`InvalidToken`/
-  `TokenExpired`/`TokenReused` → 401; `RateLimited` → 429; `Internal` → 500); konsument
-  może re-mapować jeśli chce inny envelope
-
-**Hard deps**: `axum`, `axum-client-ip`, `tower`, `cookie`.
+Biblioteka **nie zna axum**. Konsument używa `core::session_cookie_header_value`
++ `store::authenticate_session` + `AuthError::http_status` żeby zaimplementować
+swoje middleware/extractor w ~10 linijkach. Tę integrację pokazujemy w
+`examples/axum.rs` (poniżej).
 
 ### Czego biblioteka **nie** dostarcza i nie planuje
 
@@ -122,15 +125,19 @@ pub fn migrator() -> sqlx::migrate::Migrator;
 ### `examples/axum.rs` — kanoniczne złożenie
 
 W paczce, ale **nie** w public API. Pokazuje jak konsument pisze:
-- handler `POST /auth/magic-link` ze stackiem `[constant_time, stash_client_ip,
-  (opcjonalny tower_governor)]`
-- handler `POST /auth/verify`
-- handler `POST /auth/logout` chroniony `require_session`
-- handler `GET /auth/me` chroniony `require_session`, woła `lookup_user_by_id`
-- `Router::new()...with_state(state)`
+- własny `AppState { pool, mailer, cfg }` (`Arc<dyn Mailer>` w środku)
+- własny middleware `require_session_mw` używający `store::authenticate_session`
+  i wstrzykujący `AuthenticatedUser` do request extensions (~12 linii)
+- własny extractor `pub struct AuthUser(pub i64)` (~10 linii)
+- handlery `POST /auth/magic-link`, `POST /auth/verify`, `POST /auth/logout`,
+  `GET /auth/me` — każdy ~5-15 linii glue code'u
+- `impl IntoResponse for AuthError` (~10 linii, woła `AuthError::http_status`)
+- `Router::new()...with_state(state)` z poprawną kolejnością (jeśli konsument
+  wpina dodatkowy `tower_governor`, robi to sam)
 
-To jest **dokumentacja kolejności layerów + shape state'u**. Konsument copy-paste'uje
-na start i modyfikuje (analytics, custom envelope, dodatkowy hook po signup itd.).
+To jest **dokumentacja sposobu integracji**. Konsument copy-paste'uje na start
+i modyfikuje (analytics, custom envelope, dodatkowy hook po signup itd.). Żadna
+część `examples/axum.rs` nie jest re-eksportowana z paczki.
 
 ## Co biblioteka WYMUSZA (zero knob)
 
