@@ -35,9 +35,26 @@ pub async fn verify_magic_link_or_code(
     result
 }
 
-/// Stub — Task 23 lands the real implementation backed by auth_verify_attempts table.
-async fn verify_rate_check_ip(_pool: &PgPool, _ip: IpAddr, _cfg: &AuthConfig) -> Result<bool, AuthError> {
-    Ok(true)
+async fn verify_rate_check_ip(pool: &PgPool, ip: IpAddr, cfg: &AuthConfig) -> Result<bool, AuthError> {
+    if cfg.verify_per_ip_per_min_cap == 0 {
+        return Ok(true); // disabled
+    }
+
+    // Record this attempt.
+    sqlx::query("INSERT INTO auth_verify_attempts (ip) VALUES ($1)")
+        .bind(ip).execute(pool).await?;
+
+    // Count attempts in the last 60s for this IP.
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM auth_verify_attempts
+         WHERE ip = $1 AND attempted_at > NOW() - INTERVAL '1 minute'"
+    ).bind(ip).fetch_one(pool).await?;
+
+    // Opportunistic cleanup of rows older than 5 min — best-effort, ignore errors.
+    let _ = sqlx::query("DELETE FROM auth_verify_attempts WHERE attempted_at < NOW() - INTERVAL '5 minutes'")
+        .execute(pool).await;
+
+    Ok(count <= cfg.verify_per_ip_per_min_cap as i64)
 }
 
 async fn verify_by_token(
