@@ -1,0 +1,29 @@
+[package]
+name = "auth_rust"
+version = "0.1.0"
+edition = "2024"
+description = "Reusable passwordless auth library: magic-link + 6-digit code with sessions on Postgres"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+hmac = "0.12"
+rand = "0.9"
+secrecy = { version = "0.10", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "uuid", "chrono", "ipnetwork"] }
+subtle = "2.6"
+thiserror = "2"
+tokio = { version = "1", features = ["time"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v7", "serde"] }
+
+[dev-dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full", "test-util"] }
+serde_json = "1"
+http = "1"
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
