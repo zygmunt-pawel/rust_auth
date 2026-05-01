@@ -12,7 +12,7 @@ use crate::store::pad::{ISSUE_PAD, start_pad};
 #[tracing::instrument(
     name = "auth.issue_magic_link",
     skip(pool, cfg, mailer, email_input),
-    fields(email_domain = field::Empty, %ip, outcome = field::Empty),
+    fields(email = field::Empty, %ip, outcome = field::Empty),
 )]
 pub async fn issue_magic_link(
     pool: &PgPool,
@@ -26,7 +26,7 @@ pub async fn issue_magic_link(
     let email_result = Email::try_from(email_input.to_string());
     let result = match email_result {
         Ok(email) => {
-            tracing::Span::current().record("email_domain", domain_of(&email));
+            tracing::Span::current().record("email", email_for_log(&email, cfg));
             issue_inner(pool, &email, ip, cfg, mailer).await
         }
         Err(_) => {
@@ -154,7 +154,11 @@ fn to_interval(d: Duration) -> PgInterval {
     PgInterval::try_from(d).expect("duration fits in PgInterval")
 }
 
-/// Extract the domain part of an email for logging. Email is already lowercased.
-fn domain_of(email: &Email) -> &str {
-    email.as_str().rsplit('@').next().unwrap_or("?")
+/// Pick what to log for the email field — full address or just domain — per cfg.
+fn email_for_log<'e>(email: &'e Email, cfg: &AuthConfig) -> &'e str {
+    if cfg.log_full_email {
+        email.as_str()
+    } else {
+        email.as_str().rsplit('@').next().unwrap_or("?")
+    }
 }

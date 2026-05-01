@@ -124,6 +124,7 @@ cfg.verify_per_ip_per_min_cap = 30;     // set 0 to disable built-in verify rate
 cfg.code_failures_per_email_24h_cap = 50;
 cfg.same_site = SameSite::Strict;       // Lax also available
 cfg.cookie_name_suffix = "session".into();  // final cookie name = __Host-{suffix}
+cfg.log_full_email = false;             // true = log full email; default false = domain only (PII-safe)
 
 // Pluggable hooks:
 cfg.policy     = Arc::new(DisposableBlocklist::with_default_list());
@@ -245,7 +246,7 @@ The library emits `tracing` spans + events on every public operation. Plug in an
 **Spans** (one per public call):
 `auth.issue_magic_link` · `auth.verify` · `auth.session.authenticate` · `auth.session.delete` · `auth.session.rotate` · `auth.lookup_user_by_id` · `auth.cleanup_expired`
 
-**Span fields** (recorded as work progresses): `email_domain`, `ip`, `user_id`, `session_id`, `outcome`, `path` (token/code), `token_prefix`.
+**Span fields** (recorded as work progresses): `email`, `ip`, `user_id`, `session_id`, `outcome`, `path` (token/code), `token_prefix`.
 
 **Events emitted:**
 
@@ -264,7 +265,7 @@ The library emits `tracing` spans + events on every public operation. Plug in an
 | `debug!` | `outcome="invalid_token"\|"wrong_code"\|"no_live_row"` | normal verify rejections |
 | `debug!` | `outcome="no_cookie"\|"lookup_miss"` | normal session lookup misses |
 
-**PII policy:** logs contain `email_domain` (e.g. `gmail.com`), never the full email. Operator searches for a specific user via `user_id` (post-verify) or queries the `users` table directly. Audit-grade events with full identifiers go through `SessionEventSink` (your audit log / SIEM), separate from observability stack. IP addresses are logged as standard for security investigations (GDPR "legitimate interest").
+**PII policy:** by default the `email` field contains only the domain (e.g. `gmail.com`) — full addresses don't reach Loki/Tempo. Flip `cfg.log_full_email = true` to log the complete address (useful for support debugging; remember the retention implications). Operator searching for a specific user can also use `user_id` (post-verify) or query the `users` table directly. Audit-grade events with full identifiers go through `SessionEventSink` (your audit log / SIEM), separate from observability stack. IP addresses are logged as standard for security investigations (GDPR "legitimate interest").
 
 **Filter example:** `RUST_LOG="info,auth_rust=debug"` (or via `tracing_subscriber::EnvFilter`) — sees all auth decisions including silent drops while keeping the rest of your app at INFO.
 

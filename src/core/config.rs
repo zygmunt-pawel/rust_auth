@@ -85,6 +85,12 @@ pub struct AuthConfig {
 
     pub policy: Arc<dyn EmailPolicy>,
     pub event_sink: Arc<dyn SessionEventSink>,
+
+    /// Log the full email address in tracing events instead of just the domain.
+    /// Default `false` (sanitized: only `email_domain` like `gmail.com` reaches Loki/Tempo).
+    /// Flip to `true` for support debugging — but understand the PII implications:
+    /// emails will land in your observability stack with whatever retention it has.
+    pub log_full_email: bool,
 }
 
 impl AuthConfig {
@@ -125,6 +131,8 @@ impl AuthConfig {
 
             policy: Arc::new(AllowAll),
             event_sink: Arc::new(NoOpSink),
+
+            log_full_email: false,
         }
     }
 

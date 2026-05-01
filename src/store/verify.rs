@@ -16,7 +16,7 @@ use crate::store::session::create_session;
     skip(pool, input, user_agent, resolver, cfg, sink),
     fields(
         path = field::Empty,
-        email_domain = field::Empty,
+        email = field::Empty,
         %ip,
         user_id = field::Empty,
         session_id = field::Empty,
@@ -48,7 +48,7 @@ pub async fn verify_magic_link_or_code(
         }
         VerifyInput::Code { email, code } => {
             tracing::Span::current().record("path", "code");
-            tracing::Span::current().record("email_domain", domain_of(&email));
+            tracing::Span::current().record("email", email_for_log(&email, cfg));
             verify_by_code(pool, &email, &code, ip, user_agent, resolver, cfg, sink).await
         }
     };
@@ -126,7 +126,7 @@ async fn verify_by_token(
 
     let email =
         Email::try_from(email_str).map_err(|_| AuthError::Internal("stored email invalid".into()))?;
-    tracing::Span::current().record("email_domain", domain_of(&email));
+    tracing::Span::current().record("email", email_for_log(&email, cfg));
 
     let user_id = resolver
         .resolve_or_create(pool, &email)
@@ -243,6 +243,10 @@ async fn verify_by_code(
     Ok((session.token, user_id))
 }
 
-fn domain_of(email: &Email) -> &str {
-    email.as_str().rsplit('@').next().unwrap_or("?")
+fn email_for_log<'e>(email: &'e Email, cfg: &AuthConfig) -> &'e str {
+    if cfg.log_full_email {
+        email.as_str()
+    } else {
+        email.as_str().rsplit('@').next().unwrap_or("?")
+    }
 }
