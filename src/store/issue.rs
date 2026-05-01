@@ -15,7 +15,7 @@ pub async fn issue_magic_link(
     email_input: &str,
     ip: IpAddr,
     cfg: &AuthConfig,
-    mailer: &impl Mailer,
+    mailer: &dyn Mailer,
 ) -> Result<(), AuthError> {
     let pad = start_pad(ISSUE_PAD);
 
@@ -38,7 +38,7 @@ async fn issue_inner(
     email: &Email,
     ip: IpAddr,
     cfg: &AuthConfig,
-    mailer: &impl Mailer,
+    mailer: &dyn Mailer,
 ) -> Result<(), AuthError> {
     if !rate_check_per_email(pool, email, cfg).await? {
         tracing::debug!(target: "auth_rust::issue", email = email.as_str(), "rate limited per-email");

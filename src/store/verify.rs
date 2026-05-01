@@ -15,9 +15,9 @@ pub async fn verify_magic_link_or_code(
     input: VerifyInput,
     ip: IpAddr,
     user_agent: Option<&str>,
-    resolver: &impl UserResolver,
+    resolver: &dyn UserResolver,
     cfg: &AuthConfig,
-    sink: &impl SessionEventSink,
+    sink: &dyn SessionEventSink,
 ) -> Result<(SessionToken, UserId), AuthError> {
     let pad = start_pad(VERIFY_PAD);
 
@@ -45,9 +45,9 @@ async fn verify_by_token(
     token: &MagicLinkToken,
     ip: IpAddr,
     user_agent: Option<&str>,
-    resolver: &impl UserResolver,
+    resolver: &dyn UserResolver,
     cfg: &AuthConfig,
-    sink: &impl SessionEventSink,
+    sink: &dyn SessionEventSink,
 ) -> Result<(SessionToken, UserId), AuthError> {
     let token_hash = hmac_sha256_hex(&cfg.token_pepper, token.as_str());
 
@@ -92,9 +92,9 @@ async fn verify_by_code(
     code: &crate::core::VerifyCode,
     ip: IpAddr,
     user_agent: Option<&str>,
-    resolver: &impl UserResolver,
+    resolver: &dyn UserResolver,
     cfg: &AuthConfig,
-    sink: &impl SessionEventSink,
+    sink: &dyn SessionEventSink,
 ) -> Result<(SessionToken, UserId), AuthError> {
     // Global lockout check.
     let total_failures: Option<i64> = sqlx::query_scalar(

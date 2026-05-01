@@ -46,7 +46,7 @@ pub async fn authenticate_session(
     pool: &PgPool,
     cookie_header: Option<&str>,
     cfg: &AuthConfig,
-    sink: &impl SessionEventSink,
+    sink: &dyn SessionEventSink,
 ) -> Result<(AuthenticatedUser, Option<String>), AuthError> {
     let plaintext = extract_session_cookie_value(cookie_header, cfg).ok_or(AuthError::Unauthorized)?;
     let token_hash = hmac_sha256_hex(&cfg.token_pepper, plaintext);
@@ -119,7 +119,7 @@ pub async fn delete_session(
     pool: &PgPool,
     cookie_header: Option<&str>,
     cfg: &AuthConfig,
-    sink: &impl SessionEventSink,
+    sink: &dyn SessionEventSink,
 ) -> Result<Option<UserId>, AuthError> {
     let Some(plaintext) = extract_session_cookie_value(cookie_header, cfg) else { return Ok(None); };
     let token_hash = hmac_sha256_hex(&cfg.token_pepper, plaintext);
@@ -139,7 +139,7 @@ pub async fn rotate_session(
     pool: &PgPool,
     cookie_header: &str,
     cfg: &AuthConfig,
-    sink: &impl SessionEventSink,
+    sink: &dyn SessionEventSink,
 ) -> Result<SessionToken, AuthError> {
     let plaintext = extract_session_cookie_value(Some(cookie_header), cfg).ok_or(AuthError::Unauthorized)?;
     let old_hash = hmac_sha256_hex(&cfg.token_pepper, plaintext);
