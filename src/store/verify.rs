@@ -1,8 +1,6 @@
 use std::net::IpAddr;
-use std::time::Duration;
 
 use sqlx::PgPool;
-use sqlx::postgres::types::PgInterval;
 
 use crate::core::{
     AuthConfig, AuthError, Email, MagicLinkToken, SessionEvent, SessionEventSink,
@@ -10,6 +8,7 @@ use crate::core::{
 };
 use crate::store::hash::hmac_sha256_hex;
 use crate::store::pad::{VERIFY_PAD, start_pad};
+use crate::store::session::create_session;
 
 pub async fn verify_magic_link_or_code(
     pool: &PgPool,
@@ -157,34 +156,3 @@ async fn verify_by_code(
     Ok((session.token, user_id))
 }
 
-pub(crate) struct CreatedSession {
-    pub session_id: i64,
-    pub token: SessionToken,
-}
-
-pub(crate) async fn create_session(
-    pool: &PgPool, user_id: UserId, ip: IpAddr, user_agent: Option<&str>, cfg: &AuthConfig,
-) -> Result<CreatedSession, AuthError> {
-    let token = SessionToken::generate();
-    let token_hash = hmac_sha256_hex(&cfg.token_pepper, token.as_str());
-
-    let row: (i64,) = sqlx::query_as(
-        "INSERT INTO sessions
-            (session_token_hash, user_id, expires_at, absolute_expires_at, user_agent, ip)
-         VALUES ($1, $2, NOW() + $3, NOW() + $4, $5, $6)
-         RETURNING id"
-    )
-    .bind(&token_hash)
-    .bind(user_id.0)
-    .bind(to_interval(cfg.session_sliding_ttl))
-    .bind(to_interval(cfg.session_absolute_ttl))
-    .bind(user_agent)
-    .bind(ip)
-    .fetch_one(pool).await?;
-
-    Ok(CreatedSession { session_id: row.0, token })
-}
-
-fn to_interval(d: Duration) -> PgInterval {
-    PgInterval::try_from(d).expect("duration fits in PgInterval")
-}
