@@ -1,6 +1,26 @@
 use async_trait::async_trait;
+use sqlx::PgPool;
 
-use crate::core::Email;
+use crate::core::{Email, MagicLinkToken, MailerError, ResolverError, UserId, VerifyCode};
+
+#[async_trait]
+pub trait Mailer: Send + Sync + 'static {
+    async fn send_magic_link(
+        &self,
+        email: &Email,
+        link_token: &MagicLinkToken,
+        code: &VerifyCode,
+    ) -> Result<(), MailerError>;
+}
+
+#[async_trait]
+pub trait UserResolver: Send + Sync + 'static {
+    async fn resolve_or_create(
+        &self,
+        pool: &PgPool,
+        email: &Email,
+    ) -> Result<UserId, ResolverError>;
+}
 
 #[async_trait]
 pub trait EmailPolicy: Send + Sync + 'static {

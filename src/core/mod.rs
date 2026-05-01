@@ -13,5 +13,7 @@ pub use cookie::{
 pub use email::{Email, EmailError};
 pub use error::{AuthError, MailerError, ResolverError};
 pub use tokens::{MagicLinkToken, SessionToken, VerifyCode};
-pub use traits::{AllowAll, EmailPolicy, NoOpSink, SessionEvent, SessionEventSink};
+pub use traits::{
+    AllowAll, EmailPolicy, Mailer, NoOpSink, SessionEvent, SessionEventSink, UserResolver,
+};
 pub use user::{ActiveSession, AuthenticatedUser, User, UserId, UserStatus};
