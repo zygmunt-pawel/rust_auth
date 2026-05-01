@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use sqlx::PgPool;
 use sqlx::postgres::types::PgInterval;
+use tracing::field;
 
 use crate::core::{
     AuthConfig, AuthError, AuthenticatedUser, SessionEvent, SessionEventSink,
@@ -42,13 +43,29 @@ pub(crate) async fn create_session(
     Ok(CreatedSession { session_id: row.0, token })
 }
 
+#[tracing::instrument(
+    name = "auth.session.authenticate",
+    skip_all,
+    fields(
+        user_id = field::Empty,
+        session_id = field::Empty,
+        outcome = field::Empty,
+    ),
+)]
 pub async fn authenticate_session(
     pool: &PgPool,
     cookie_header: Option<&str>,
     cfg: &AuthConfig,
     sink: &dyn SessionEventSink,
 ) -> Result<(AuthenticatedUser, Option<String>), AuthError> {
-    let plaintext = extract_session_cookie_value(cookie_header, cfg).ok_or(AuthError::Unauthorized)?;
+    let plaintext = match extract_session_cookie_value(cookie_header, cfg) {
+        Some(p) => p,
+        None => {
+            tracing::Span::current().record("outcome", "no_cookie");
+            tracing::debug!(outcome = "no_cookie", "no session cookie present");
+            return Err(AuthError::Unauthorized);
+        }
+    };
     let token_hash = hmac_sha256_hex(&cfg.token_pepper, plaintext);
 
     let row: Option<(i64, i64, uuid::Uuid, String, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
@@ -67,8 +84,15 @@ pub async fn authenticate_session(
 
     let (session_id, user_id, user_public_id, email, needs_refresh, _absolute_expires_at) = match row {
         Some(r) => r,
-        None => return Err(AuthError::Unauthorized),
+        None => {
+            tracing::Span::current().record("outcome", "lookup_miss");
+            tracing::debug!(outcome = "lookup_miss", "session token not found / expired / inactive user");
+            return Err(AuthError::Unauthorized);
+        }
     };
+
+    tracing::Span::current().record("user_id", user_id);
+    tracing::Span::current().record("session_id", session_id);
 
     let user = AuthenticatedUser {
         id: UserId(user_id),
@@ -78,6 +102,7 @@ pub async fn authenticate_session(
     };
 
     if !needs_refresh {
+        tracing::Span::current().record("outcome", "ok");
         return Ok((user, None));
     }
 
@@ -97,43 +122,77 @@ pub async fn authenticate_session(
 
     if updated.is_some() {
         sink.on_event(SessionEvent::Refreshed { session_id, user_id }).await;
-        // Re-emit Set-Cookie so browser-side expiry stays in sync.
-        // The TOKEN value is unchanged — we just bump Max-Age.
         let token_plain_for_cookie = SessionToken::from_string(plaintext.to_string());
         let cookie = session_cookie_header_value(&token_plain_for_cookie, cfg);
+        tracing::Span::current().record("outcome", "refreshed");
+        tracing::info!(outcome = "refreshed", "session sliding TTL bumped");
         return Ok((user, Some(cookie)));
     }
-    // If updated was None, another request beat us to the refresh — that's fine, session is valid.
+    // Another request beat us to the refresh — session is still valid for them.
+    tracing::Span::current().record("outcome", "ok_lost_race");
     Ok((user, None))
 }
 
+#[tracing::instrument(
+    name = "auth.session.delete",
+    skip_all,
+    fields(user_id = field::Empty, session_id = field::Empty, outcome = field::Empty),
+)]
 pub async fn delete_session(
     pool: &PgPool,
     cookie_header: Option<&str>,
     cfg: &AuthConfig,
     sink: &dyn SessionEventSink,
 ) -> Result<Option<UserId>, AuthError> {
-    let Some(plaintext) = extract_session_cookie_value(cookie_header, cfg) else { return Ok(None); };
+    let Some(plaintext) = extract_session_cookie_value(cookie_header, cfg) else {
+        tracing::Span::current().record("outcome", "no_cookie");
+        return Ok(None);
+    };
     let token_hash = hmac_sha256_hex(&cfg.token_pepper, plaintext);
 
     let row: Option<(i64, i64)> = sqlx::query_as(
-        "DELETE FROM sessions WHERE session_token_hash = $1 RETURNING id, user_id"
-    ).bind(&token_hash).fetch_optional(pool).await?;
+        "DELETE FROM sessions WHERE session_token_hash = $1 RETURNING id, user_id",
+    )
+    .bind(&token_hash)
+    .fetch_optional(pool)
+    .await?;
 
     if let Some((session_id, user_id)) = row {
+        tracing::Span::current().record("session_id", session_id);
+        tracing::Span::current().record("user_id", user_id);
+        tracing::Span::current().record("outcome", "revoked");
+        tracing::info!(outcome = "revoked", "session revoked");
         sink.on_event(SessionEvent::Revoked { session_id, user_id }).await;
         return Ok(Some(UserId(user_id)));
     }
+    tracing::Span::current().record("outcome", "no_match");
     Ok(None)
 }
 
+#[tracing::instrument(
+    name = "auth.session.rotate",
+    skip_all,
+    fields(
+        user_id = field::Empty,
+        old_session_id = field::Empty,
+        new_session_id = field::Empty,
+        outcome = field::Empty,
+    ),
+)]
 pub async fn rotate_session(
     pool: &PgPool,
     cookie_header: &str,
     cfg: &AuthConfig,
     sink: &dyn SessionEventSink,
 ) -> Result<SessionToken, AuthError> {
-    let plaintext = extract_session_cookie_value(Some(cookie_header), cfg).ok_or(AuthError::Unauthorized)?;
+    let plaintext = match extract_session_cookie_value(Some(cookie_header), cfg) {
+        Some(p) => p,
+        None => {
+            tracing::Span::current().record("outcome", "no_cookie");
+            tracing::warn!(outcome = "no_cookie", "rotate_session called without cookie");
+            return Err(AuthError::Unauthorized);
+        }
+    };
     let old_hash = hmac_sha256_hex(&cfg.token_pepper, plaintext);
 
     let new_token = SessionToken::generate();
@@ -156,15 +215,35 @@ pub async fn rotate_session(
             DELETE FROM sessions WHERE id = (SELECT id FROM src)
             RETURNING id, user_id
          )
-         SELECT del.id, ins.id, del.user_id FROM del, ins"
+         SELECT del.id, ins.id, del.user_id FROM del, ins",
     )
     .bind(&old_hash)
     .bind(&new_hash)
     .bind(to_interval(cfg.session_sliding_ttl))
-    .fetch_optional(pool).await?;
+    .fetch_optional(pool)
+    .await?;
 
-    let (old_id, new_id, user_id) = row.ok_or(AuthError::Unauthorized)?;
-    sink.on_event(SessionEvent::Rotated { old_session_id: old_id, new_session_id: new_id, user_id }).await;
+    let (old_id, new_id, user_id) = match row {
+        Some(r) => r,
+        None => {
+            tracing::Span::current().record("outcome", "stale_cookie");
+            tracing::warn!(outcome = "stale_cookie", "rotate_session: cookie did not match a live session");
+            return Err(AuthError::Unauthorized);
+        }
+    };
+
+    tracing::Span::current().record("user_id", user_id);
+    tracing::Span::current().record("old_session_id", old_id);
+    tracing::Span::current().record("new_session_id", new_id);
+    tracing::Span::current().record("outcome", "rotated");
+    tracing::info!(outcome = "rotated", "session token rotated (privilege change)");
+
+    sink.on_event(SessionEvent::Rotated {
+        old_session_id: old_id,
+        new_session_id: new_id,
+        user_id,
+    })
+    .await;
     Ok(new_token)
 }
 

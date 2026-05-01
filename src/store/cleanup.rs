@@ -46,6 +46,7 @@ impl CleanupReport {
 ///     "auth cleanup",
 /// );
 /// ```
+#[tracing::instrument(name = "auth.cleanup_expired", skip_all)]
 pub async fn cleanup_expired(pool: &PgPool) -> Result<CleanupReport, AuthError> {
     let magic_links_deleted = sqlx::query(
         "DELETE FROM magic_links WHERE created_at < NOW() - INTERVAL '7 days'",
@@ -68,9 +69,19 @@ pub async fn cleanup_expired(pool: &PgPool) -> Result<CleanupReport, AuthError> 
     .await?
     .rows_affected();
 
-    Ok(CleanupReport {
+    let report = CleanupReport {
         magic_links_deleted,
         sessions_deleted,
         verify_attempts_deleted,
-    })
+    };
+
+    tracing::info!(
+        magic_links = magic_links_deleted,
+        sessions = sessions_deleted,
+        verify_attempts = verify_attempts_deleted,
+        total = report.total(),
+        "auth cleanup pass complete"
+    );
+
+    Ok(report)
 }

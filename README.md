@@ -240,7 +240,33 @@ Hardcoded sensible windows: `magic_links` older than 7 days (preserves the 24h l
 
 ### Observability
 
-Wire `SessionEventSink` to your stack. Useful counters: `auth_sessions_{created,refreshed,rotated,revoked}_total`. The library also emits `tracing::debug!` with reasons for silent issue drops (rate-limited, policy-denied, format-invalid).
+The library emits `tracing` spans + events on every public operation. Plug in any `tracing-subscriber` (or our [`rust_telemetry`](https://github.com/zygmunt-pawel/rust_telemetry) crate for OTel/Loki/Tempo out of the box). Trace↔log correlation just works.
+
+**Spans** (one per public call):
+`auth.issue_magic_link` · `auth.verify` · `auth.session.authenticate` · `auth.session.delete` · `auth.session.rotate` · `auth.lookup_user_by_id` · `auth.cleanup_expired`
+
+**Span fields** (recorded as work progresses): `email_domain`, `ip`, `user_id`, `session_id`, `outcome`, `path` (token/code), `token_prefix`.
+
+**Events emitted:**
+
+| Level | Event | When |
+|---|---|---|
+| `info!` | `outcome="issued"` | magic link sent successfully |
+| `info!` | `outcome="success"` | verify (token or code) succeeded |
+| `info!` | `outcome="refreshed"` | session sliding TTL bumped |
+| `info!` | `outcome="rotated"` | privilege-change rotation |
+| `info!` | `outcome="revoked"` | logout |
+| `info!` | (cleanup pass) | how many rows GC'd from each table |
+| `warn!` | `outcome="rate_limited"` | verify per-IP cap hit |
+| `warn!` | `outcome="email_locked"` | 50/24h failed-attempt cap tripped |
+| `warn!` | `outcome="mailer_failed"` | mailer rejected send |
+| `debug!` | `outcome="format_invalid"\|"rate_limited_email"\|"rate_limited_ip"\|"policy_denied"` | silent drops in `issue_magic_link` |
+| `debug!` | `outcome="invalid_token"\|"wrong_code"\|"no_live_row"` | normal verify rejections |
+| `debug!` | `outcome="no_cookie"\|"lookup_miss"` | normal session lookup misses |
+
+**PII policy:** logs contain `email_domain` (e.g. `gmail.com`), never the full email. Operator searches for a specific user via `user_id` (post-verify) or queries the `users` table directly. Audit-grade events with full identifiers go through `SessionEventSink` (your audit log / SIEM), separate from observability stack. IP addresses are logged as standard for security investigations (GDPR "legitimate interest").
+
+**Filter example:** `RUST_LOG="info,auth_rust=debug"` (or via `tracing_subscriber::EnvFilter`) — sees all auth decisions including silent drops while keeping the rest of your app at INFO.
 
 ---
 

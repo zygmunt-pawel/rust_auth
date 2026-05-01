@@ -34,6 +34,7 @@ impl UserResolver for AutoSignupResolver {
     }
 }
 
+#[tracing::instrument(name = "auth.lookup_user_by_id", skip(pool), fields(user_id = user_id.0))]
 pub async fn lookup_user_by_id(pool: &PgPool, user_id: UserId) -> Result<Option<User>, AuthError> {
     let row: Option<(i64, Uuid, String, String, DateTime<Utc>)> = sqlx::query_as(
         "SELECT id, public_id, email, status, created_at FROM users WHERE id = $1"
