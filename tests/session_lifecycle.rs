@@ -84,3 +84,11 @@ async fn rotate_session_replaces_token_preserving_absolute_expiry(pool: sqlx::Pg
     let (user, _) = auth_rust::store::authenticate_session(&pool, Some(&new_cookie), &cfg, &*sink).await.unwrap();
     assert_eq!(user.id.0, user_id);
 }
+
+#[sqlx::test]
+async fn lookup_user_by_id_returns_user_after_signup(pool: sqlx::PgPool) {
+    let (_, user_id) = login_and_get_cookie(&pool).await;
+    let user = auth_rust::store::lookup_user_by_id(&pool, auth_rust::core::UserId(user_id)).await.unwrap();
+    assert!(user.is_some());
+    assert_eq!(user.unwrap().email, "u@e.com");
+}
