@@ -17,3 +17,9 @@ pub use traits::{
     AllowAll, EmailPolicy, Mailer, NoOpSink, SessionEvent, SessionEventSink, UserResolver,
 };
 pub use user::{ActiveSession, AuthenticatedUser, User, UserId, UserStatus};
+
+#[derive(Debug, Clone)]
+pub enum VerifyInput {
+    Token(MagicLinkToken),
+    Code { email: Email, code: VerifyCode },
+}
