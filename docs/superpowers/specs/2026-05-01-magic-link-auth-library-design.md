@@ -60,8 +60,10 @@ pub async fn issue_magic_link(
 ) -> Result<(), AuthError>;
 // W środku: constant-time pad 100ms (wbudowany), rate limit per-email +
 // per-IP, generacja dwóch sekretów (token sha256 + kod argon2id), INSERT,
-// wywołanie Mailer; pierwsza próba sync, Retryable → tokio::spawn z
-// exp-backoff (3 próby), Permanent → propagacja.
+// JEDNA synchroniczna próba mailer.send_magic_link. Każdy MailerError
+// (Retryable lub Permanent) jest propagowany jako AuthError::MailerFailed.
+// Retry / kolejka to sprawa konsumenta — biblioteka nie spawn'uje tasków
+// w tle (lifecycle kontrolowany przez konsumenta).
 
 pub async fn verify_magic_link_or_code(
     pool: &PgPool,
@@ -99,7 +101,8 @@ pub fn migrator() -> sqlx::migrate::Migrator;
 ```
 
 **Hard deps**: `sqlx` (Postgres), `sha2`, `rand`, `base64`, `argon2`, `uuid`,
-`tokio` (do `spawn` retry).
+`async-trait` (do async fn w traitach `Mailer`/`UserResolver`). Bez `tokio`
+jako explicit dep — biblioteka nie spawn'uje tasków w tle.
 
 ### Brak `auth_rust::axum` / `auth_rust::actix` / żadnego frameworkowego modułu
 
@@ -116,11 +119,12 @@ swoje middleware/extractor w ~10 linijkach. Tę integrację pokazujemy w
   `issue_magic_link` jest core security; HTTP-level to defense-in-depth, konsument
   wpina `tower_governor` ze swoim configem jeśli chce
 - Metryk Prometheusa
-- Kolejki jobów (`apalis`) — wysyłka maila inline w `issue_magic_link`. Pierwsza
-  próba synchroniczna; jeśli `Mailer` zwróci `MailerError::Retryable`, `store`
-  spawnuje `tokio::spawn` z exp-backoff retry (3 próby: ~1 s / 5 s / 25 s) i
-  funkcja zwraca `Ok(())` natychmiast (wpis w DB już jest, idempotentny).
-  `MailerError::Permanent` → propagowany do callera od razu.
+- Kolejki jobów / retry email-sendowe — wysyłka maila inline w `issue_magic_link`,
+  **jedna próba synchroniczna**, każdy `MailerError` (Retryable albo Permanent)
+  propagowany do konsumenta jako `AuthError::MailerFailed`. Konsument decyduje:
+  retry inline, wrzucenie do swojej kolejki (`apalis`, `sidekiq-rs`, własna),
+  log + 500, albo log + 200 (silent fail — akceptowalne dla magic-linków, user
+  poprosi ponownie). Biblioteka nie zarządza background-task lifecycle.
 
 ### `examples/axum.rs` — kanoniczne złożenie
 
