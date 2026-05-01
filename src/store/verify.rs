@@ -88,11 +88,73 @@ async fn verify_by_token(
 }
 
 async fn verify_by_code(
-    _pool: &PgPool, _email: &Email, _code: &crate::core::VerifyCode,
-    _ip: IpAddr, _user_agent: Option<&str>,
-    _resolver: &impl UserResolver, _cfg: &AuthConfig, _sink: &impl SessionEventSink,
+    pool: &PgPool,
+    email: &Email,
+    code: &crate::core::VerifyCode,
+    ip: IpAddr,
+    user_agent: Option<&str>,
+    resolver: &impl UserResolver,
+    cfg: &AuthConfig,
+    sink: &impl SessionEventSink,
 ) -> Result<(SessionToken, UserId), AuthError> {
-    Err(AuthError::Internal("code path not yet implemented".into()))
+    // Global lockout check.
+    let total_failures: Option<i64> = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(code_attempts)::bigint, 0)
+         FROM magic_links
+         WHERE email = $1 AND created_at > NOW() - INTERVAL '24 hours'"
+    ).bind(email.as_str()).fetch_optional(pool).await?;
+    if total_failures.unwrap_or(0) >= cfg.code_failures_per_email_24h_cap as i64 {
+        // Dummy HMAC anyway for timing parity.
+        let _ = hmac_sha256_hex(&cfg.token_pepper, code.as_str());
+        return Err(AuthError::EmailLocked);
+    }
+
+    let provided_hash = hmac_sha256_hex(&cfg.token_pepper, code.as_str());
+
+    // Find a live row, increment code_attempts atomically, hard-invalidate at 5.
+    let row: Option<(i64, String, i32)> = sqlx::query_as(
+        "UPDATE magic_links
+         SET code_attempts = code_attempts + 1,
+             used_at = CASE WHEN code_attempts + 1 >= 5 THEN NOW() ELSE used_at END
+         WHERE id = (
+             SELECT id FROM magic_links
+             WHERE email = $1
+               AND used_at IS NULL
+               AND code_expires_at > NOW()
+             ORDER BY created_at DESC
+             LIMIT 1
+         )
+         RETURNING id, code_hash, code_attempts"
+    ).bind(email.as_str()).fetch_optional(pool).await?;
+
+    let (row_id, stored_hash, attempts_after) = match row {
+        Some(r) => r,
+        None => {
+            // Dummy work: still HMAC, still time-equivalent.
+            let _ = crate::store::hash::ct_eq_hex(&provided_hash, &provided_hash);
+            return Err(AuthError::InvalidToken);
+        }
+    };
+
+    if !crate::store::hash::ct_eq_hex(&provided_hash, &stored_hash) {
+        // Wrong code. The UPDATE already incremented attempts and invalidated at 5.
+        let _ = (row_id, attempts_after);
+        return Err(AuthError::InvalidToken);
+    }
+
+    // Correct code. Mark used (idempotent — UPDATE above only set used_at on 5th).
+    sqlx::query("UPDATE magic_links SET used_at = NOW() WHERE id = $1 AND used_at IS NULL")
+        .bind(row_id).execute(pool).await?;
+
+    let user_id = resolver.resolve_or_create(pool, email).await
+        .map_err(|e| AuthError::Internal(format!("resolver: {e}")))?;
+    let session = create_session(pool, user_id, ip, user_agent, cfg).await?;
+    sink.on_event(SessionEvent::Created {
+        session_id: session.session_id, user_id: user_id.0, ip,
+        user_agent: user_agent.map(String::from),
+    }).await;
+
+    Ok((session.token, user_id))
 }
 
 pub(crate) struct CreatedSession {
