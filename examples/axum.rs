@@ -4,7 +4,6 @@
 //! Demonstrates: AppState, require_session middleware, AuthError → Response,
 //! DisposableBlocklist as EmailPolicy, TracingSink as SessionEventSink.
 
-use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
@@ -20,9 +19,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use auth_rust::core::{
-    AuthConfig, AuthError, AuthenticatedUser, Email, EmailPolicy, MagicLinkToken,
-    Mailer, MailerError, Pepper, SameSite, SessionEvent, SessionEventSink,
-    VerifyCode, VerifyInput,
+    AuthConfig, AuthError, AuthenticatedUser, DisposableBlocklist, Email, MagicLinkToken,
+    Mailer, MailerError, SameSite, SessionEvent, SessionEventSink, VerifyCode, VerifyInput,
 };
 use auth_rust::core::cookie::{session_cookie_clear_header_value, session_cookie_header_value};
 use auth_rust::store::{
@@ -50,26 +48,6 @@ impl Mailer for LogMailer {
     ) -> Result<(), MailerError> {
         tracing::info!(email = email.as_str(), link = link.as_str(), code = code.as_str(), "mock_mail");
         Ok(())
-    }
-}
-
-// ---------- EmailPolicy: simple disposable blocklist ----------
-struct DisposableBlocklist { blocked: HashSet<String> }
-
-impl DisposableBlocklist {
-    fn from_embedded() -> Self {
-        // Replace with `include_str!("../disposable_domains.txt")` in production.
-        let raw = "mailinator.com\nguerrillamail.com\n10minutemail.com";
-        let blocked = raw.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect();
-        Self { blocked }
-    }
-}
-
-#[async_trait::async_trait]
-impl EmailPolicy for DisposableBlocklist {
-    async fn allow(&self, email: &Email) -> bool {
-        let domain = email.as_str().rsplit('@').next().unwrap_or("");
-        !self.blocked.contains(domain)
     }
 }
 
@@ -197,9 +175,12 @@ async fn main() -> anyhow::Result<()> {
     let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
     auth_rust::store::migrator().run(&pool).await?;
 
-    let pepper = Pepper::from_base64(&std::env::var("AUTH_TOKEN_PEPPER")?);
-    let mut cfg = AuthConfig::new(pepper);
-    cfg.policy = Arc::new(DisposableBlocklist::from_embedded());
+    let pepper_b64 = std::env::var("AUTH_TOKEN_PEPPER")?;
+    let mut cfg = AuthConfig::new(&pepper_b64)?;
+    cfg.policy = Arc::new(
+        DisposableBlocklist::with_default_list()
+            .unblock("mailinator.com")  // example: carve out QA mailbox; remove for prod
+    );
     cfg.event_sink = Arc::new(TracingSink);
     cfg.same_site = SameSite::Strict;
 

@@ -2,11 +2,13 @@ pub mod config;
 pub mod cookie;
 pub mod email;
 pub mod error;
+pub mod policy;
 pub mod tokens;
 pub mod traits;
 pub mod user;
 
-pub use config::{AuthConfig, Pepper, SameSite};
+pub use config::{AuthConfig, ConfigError, Pepper, SameSite};
+pub use policy::DisposableBlocklist;
 pub use cookie::{
     extract_session_cookie_value, session_cookie_clear_header_value, session_cookie_header_value,
 };

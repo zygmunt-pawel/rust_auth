@@ -20,7 +20,7 @@ pub fn test_pepper() -> Pepper {
 }
 
 pub fn test_config() -> AuthConfig {
-    AuthConfig::new(test_pepper())
+    AuthConfig::from_pepper(test_pepper())
 }
 
 pub fn loopback_ip() -> IpAddr {
