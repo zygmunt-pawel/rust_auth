@@ -27,7 +27,7 @@ That's the whole flow. ~50 lines of glue wires it into axum/actix/anything — s
 - ✅ Per-email + per-IP rate limits on issue, per-IP throttle on verify
 - ✅ 5/row + 50/24h global per-email failed-attempt lockout
 - ✅ Constant-time pad (~100ms) on issue + verify — anti-enumeration
-- ✅ Bundled disposable-email blocklist (~5400 domains, opt-in)
+- ✅ Bundled disposable-email blocklist (~5400 domains, **on by default** — fail-secure)
 - ✅ Auto-signup at first verify (or plug your own `UserResolver`)
 - ✅ Audit-log hook (`SessionEventSink`)
 - ✅ Cleanup helper for old rows (`store::cleanup_expired`)
@@ -54,18 +54,21 @@ openssl rand -base64 32
 Bootstrap on app startup:
 
 ```rust
-use std::sync::Arc;
-use auth_rust::core::{AuthConfig, DisposableBlocklist};
+use auth_rust::core::AuthConfig;
 use auth_rust::store;
 
 let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
 store::migrator().run(&pool).await?;          // single migration: users, magic_links, sessions, auth_verify_attempts
 
 let pepper_b64 = std::env::var("AUTH_TOKEN_PEPPER")?;  // YOU read env, not the lib
-let mut cfg = AuthConfig::new(&pepper_b64)?;            // sane defaults; mutate fields below if needed
+let cfg = AuthConfig::builder(&pepper_b64)?            // builder applies sane defaults
+    // .policy(...)  // override default DisposableBlocklist if you want custom logic
+    // .same_site(SameSite::Lax)
+    // ...other overrides
+    .build()?;
 
-// Optional: enable bundled disposable-email blocklist
-cfg.policy = Arc::new(DisposableBlocklist::with_default_list());
+// Disposable-email blocklist is ON by default. Opt out for invite-only / B2B:
+//   .policy(Arc::new(auth_rust::core::AllowAll))
 ```
 
 Wire three handlers (axum example):
@@ -96,8 +99,8 @@ For protected routes wrap them with middleware that calls `store::authenticate_s
 - **`HttpOnly` + `Secure` + `SameSite=Strict`** (default; `Lax` available as opt-in).
 - **Constant-time pad** wraps `issue_magic_link` and `verify_magic_link_or_code`. Format-error / rate-limited / blocked / success all return in similar wall-clock time.
 - **Atomic single-statement** code-attempt increment — no TOCTOU on concurrent verify.
-- **5 attempts per code row** + **50/24h global per-email** → `EmailLocked`.
-- **3 attempts per URL token** (defense-in-depth despite 256-bit entropy).
+- **Per-row brute-force cap on the 6-digit code** (default 5, configurable via `code_attempts_per_row`) + **50/24h global per-email** → `EmailLocked`.
+- **Per-token cap on URL link attempts** (default 3, configurable via `link_attempts_per_token`) — defense-in-depth despite 256-bit entropy.
 - **Atomic in-place refresh** — concurrent reqs can't all race on session refresh.
 - **Rejection sampling** for the 6-digit code (no modulo bias).
 - **`subtle::ConstantTimeEq`** for hash equality in Rust.
@@ -109,30 +112,62 @@ For protected routes wrap them with middleware that calls `store::authenticate_s
 
 ## Configuration
 
+`AuthConfig` is built via `AuthConfigBuilder`. The builder validates every single-field
+range and every cross-field invariant (e.g. `code_ttl <= magic_link_ttl`,
+`session_refresh_threshold < session_sliding_ttl`) at `build()` time — invalid configs
+return `ConfigError::Invalid` with a precise message. After build, fields are read-only.
+
 ```rust
-let mut cfg = AuthConfig::new(&pepper_b64)?;
+let cfg = AuthConfig::builder(&pepper_b64)?
+    .magic_link_ttl(Duration::from_secs(15 * 60))           // URL token validity
+    .code_ttl(Duration::from_secs(15 * 60))                 // must be <= magic_link_ttl
+    .session_sliding_ttl(Duration::from_secs(7 * 24 * 3600))
+    .session_absolute_ttl(Duration::from_secs(30 * 24 * 3600))
+    .session_refresh_threshold(Duration::from_secs(24 * 3600))
+    // Issue rate limits — rolling window (default 30 min). On (cap+1)th request the
+    // email/IP is blocked for `issue_block_duration`. Block does NOT extend on retry.
+    .issue_per_email_cap(15)
+    .issue_per_ip_cap(15)
+    .issue_window(Duration::from_secs(30 * 60))             // must be >= 60s
+    .issue_block_duration(Duration::from_secs(30 * 60))
+    // Repeat-offender: IP blocked >= N times in 24h gets a permanent block (0 = off).
+    .ip_permanent_block_threshold(3)
+    .verify_per_ip_per_min_cap(30)                          // 0 = disable
+    // Per-row brute-force cap on the 6-digit code. Range 1..=10 enforced at build.
+    .code_attempts_per_row(5)
+    // Per-token brute-force cap on the URL magic-link. Range 1..=10 enforced at build.
+    .link_attempts_per_token(3)
+    // Account-level lockout — DEFAULT 0 (disabled). Anyone who knows the email can
+    // otherwise burn wrong codes to push SUM over the cap and lock out the legit user
+    // (OWASP DoS-via-lockout pattern). Only enable with a separate recovery path.
+    .code_failures_per_email_24h_cap(0)
+    .same_site(SameSite::Strict)
+    .cookie_name_suffix("session")                          // final cookie = __Host-session
+    .log_full_email(false)                                  // false = domain only (PII-safe)
+    // Pluggable hooks:
+    .policy(Arc::new(DisposableBlocklist::with_default_list()))
+    .event_sink(Arc::new(MyDatadogSink))
+    .build()?;
 
-cfg.magic_link_ttl       = Duration::from_secs(15 * 60);       // URL token validity
-cfg.code_ttl             = Duration::from_secs(5 * 60);        // OTP code validity (shorter)
-cfg.session_sliding_ttl  = Duration::from_secs(7 * 24 * 3600); // sliding window
-cfg.session_absolute_ttl = Duration::from_secs(30 * 24 * 3600);// hard cap
-cfg.session_refresh_threshold = Duration::from_secs(24 * 3600);// bump TTL when <1d remains
-cfg.issue_per_email_min_gap   = Duration::from_secs(60);
-cfg.issue_per_email_24h_cap   = 5;
-cfg.issue_per_ip_1h_cap       = 5;
-cfg.issue_per_ip_24h_cap      = 30;
-cfg.verify_per_ip_per_min_cap = 30;     // set 0 to disable built-in verify rate limit
-cfg.code_failures_per_email_24h_cap = 50;
-cfg.same_site = SameSite::Strict;       // Lax also available
-cfg.cookie_name_suffix = "session".into();  // final cookie name = __Host-{suffix}
-cfg.log_full_email = false;             // true = log full email; default false = domain only (PII-safe)
-
-// Pluggable hooks:
-cfg.policy     = Arc::new(DisposableBlocklist::with_default_list());
-cfg.event_sink = Arc::new(MyDatadogSink);
+// Optional: log effective settings on startup so they show up in your aggregator.
+cfg.log_settings();
 ```
 
-Every field has a sensible default — tune what you need. `AuthConfig::new(&str)` is the primary constructor. For tests / KMS-fetched bytes use `AuthConfig::from_pepper(Pepper::from_bytes([..]))`.
+Every setter is optional — `AuthConfig::builder(&pepper_b64)?.build()?` produces a
+config with sensible defaults (15 min TTLs, 15-issue caps, lockout disabled, etc.).
+For tests / KMS-fetched bytes use `AuthConfig::builder_from_pepper(Pepper::from_bytes([..]))`.
+
+### Migration safety (changing config on a live DB)
+
+Every field is "future-proof" — old data keeps working when you change config:
+
+- TTLs (`magic_link_ttl`, `code_ttl`, `session_*_ttl`) are bound at INSERT time. Old rows keep their original `expires_at`; new rows use the new value.
+- Caps and windows (`issue_per_*_cap`, `issue_window`) are evaluated on each request from current config — no migration needed.
+- `code_attempts_per_row` and `link_attempts_per_token` are enforced 1..=10 by builder validation. The DB does not duplicate the upper bound — config is the single source of truth, no schema migration needed to tweak.
+- `issue_block_duration` change applies to new blocks only; existing blocks keep their `expires_at`.
+- `ip_permanent_block_threshold` change applies on next escalation decision; past blocks count toward lookback regardless.
+- Disabling/enabling `code_failures_per_email_24h_cap` is instant; existing high-SUM emails will lock out (or unlock) on next verify.
+- Permanent IP blocks (`expires_at = 'infinity'`) survive cleanup forever — manual `DELETE` required to lift.
 
 ---
 
@@ -146,13 +181,16 @@ impl Mailer for MyMailer {
     async fn send_magic_link(
         &self, email: &Email, link: &MagicLinkToken, code: &VerifyCode,
     ) -> Result<(), MailerError> {
-        // send via lettre/resend/sendgrid; include both link and code in body
-        Ok(())
+        match self.client.send(/* ... */).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.is_transient() => Err(MailerError::retryable(e.to_string())),  // 5xx, timeouts
+            Err(e)                     => Err(MailerError::permanent(e.to_string())),  // 4xx, suspended
+        }
     }
 }
 ```
 
-Library makes ONE synchronous attempt; errors propagate as `AuthError::MailerFailed`. You decide retry/queue/log.
+Library makes ONE synchronous attempt; both variants surface to callers as `AuthError::MailerFailed`. The Retryable/Permanent split is for *your* observability and retry layer — wrap the mailer with your queue, look at the variant, decide what to do. The auth call itself does not retry.
 
 ### `EmailPolicy` — disposable blocklist + custom rules
 
@@ -163,7 +201,9 @@ let policy = DisposableBlocklist::with_default_list()
     .add_iter(["a.example", "b.example"])
     .unblock("mailinator.com");       // QA exception
 
-cfg.policy = Arc::new(policy);
+let cfg = AuthConfig::builder(&pepper_b64)?
+    .policy(Arc::new(policy))
+    .build()?;
 
 // Or write your own (tenant whitelist, geo restrictions, etc.):
 struct TenantOnly;
@@ -209,6 +249,89 @@ Default `NoOpSink` — no events emitted.
 
 ---
 
+## Production deployment
+
+### Trusting the client IP (CRITICAL)
+
+Every per-IP defense — `issue_per_ip_cap`, `ip_permanent_block_threshold`,
+`verify_per_ip_per_min_cap` — is only as good as the `IpAddr` you pass in. If you
+naively read `X-Forwarded-For` from any incoming request, an attacker rotates the
+header and resets every counter you have. Cap = fiction.
+
+**Behind a reverse proxy** (Cloudflare, nginx, ALB), use a crate that validates the
+header against a whitelist of trusted proxy CIDRs — for axum:
+
+```rust
+use axum_client_ip::{ClientIp, ClientIpSource};
+
+// configure once, with the proxies YOU trust:
+let app = Router::new()
+    .route("/auth/magic-link", post(magic_link_handler))
+    .layer(ClientIpSource::CloudflareConnectingIp.into_extension());
+    // or RightmostXForwardedFor / RightmostForwarded with explicit trusted CIDRs
+
+async fn magic_link_handler(ClientIp(ip): ClientIp, /* ... */) { /* ... */ }
+```
+
+Same applies to actix (`actix-web` `ConnectionInfo::realip_remote_addr` with explicit
+trusted IPs) or any other framework. **Never** read `X-Forwarded-For` directly from
+`HeaderMap` without a trust check on the peer address.
+
+The example in `examples/axum.rs` uses `IpAddr::LOCALHOST` as a placeholder — replace
+that before deploying.
+
+### Outbound mail volume (out of scope)
+
+This library caps **per-email** (mailbomb on a victim) and **per-IP** (distributed
+issue from one source). It does **not** cap *total outbound mail across all callers* —
+that's mailer-concern, not auth-concern, and the right limit depends on your provider
+plan. Two clean seams to plug your own rate limiter:
+
+**1. `EmailPolicy` — pre-flight veto (preferred for global caps).** Fires before token
+generation and DB write, so rejected requests cost nothing. Silent-drop semantics
+identical to disposable-domain rejection — attacker can't tell why they were dropped.
+
+```rust
+// `bucket` here is whatever rate-limiter you have (governor / leaky-bucket / Redis).
+// `governor` example: `RateLimiter<NotKeyed, _, _>` with `.check().is_ok()`.
+struct GlobalCapPolicy<L> { limiter: L, inner: DisposableBlocklist }
+
+#[async_trait::async_trait]
+impl<L: RateCheck + Send + Sync + 'static> EmailPolicy for GlobalCapPolicy<L> {
+    async fn allow(&self, email: &Email) -> bool {
+        if !self.limiter.try_acquire().await {
+            tracing::warn!(outcome = "global_cap_hit", "outbound mail rate-limited");
+            return false;
+        }
+        self.inner.allow(email).await   // chain disposable check
+    }
+}
+
+let cfg = AuthConfig::builder(&pepper_b64)?
+    .policy(Arc::new(GlobalCapPolicy {
+        limiter: my_limiter,
+        inner: DisposableBlocklist::with_default_list(),
+    }))
+    .build()?;
+```
+
+**2. `Mailer` wrapper — post-decision veto.** Fires after the row is in `magic_links`
+but before the mail leaves. Use this if your token bucket should count *actual sends*
+not *attempts*, or if your provider returns rate-limit errors you want to translate.
+
+For cross-replica or cross-service quotas, back the bucket with Redis. Most mailer
+providers (SES, Resend, Postmark) also enforce per-API-key rate limits server-side —
+check yours before reinventing.
+
+### IPv6 considerations
+
+`auth_ip_blocks.ip` is matched as exact `INET`. An attacker with a /64 prefix (typical
+ISP/VPS allocation) has 2^64 addresses. If you're seeing distributed abuse from IPv6,
+group by /64 in your reverse proxy / WAF before the request reaches the auth lib —
+or fork and change the cap queries to `set_masklen(ip, 64) >>= $1`.
+
+---
+
 ## Operating it
 
 ### Pepper management
@@ -217,7 +340,7 @@ Default `NoOpSink` — no events emitted.
 
 - Generate once: `openssl rand -base64 32`
 - Store in your secrets manager (Vault / 1Password / AWS SM / `.env` for dev)
-- Pass the string to `AuthConfig::new(&pepper)?`
+- Pass the string to `AuthConfig::builder(&pepper)?.build()?`
 - **Rotation = full invalidation** — changing the pepper invalidates every session, magic-link, and OTP code. There's no key versioning.
 
 ### Multi-instance
@@ -230,7 +353,8 @@ All state in Postgres. Two app instances with same `DATABASE_URL` + same pepper 
 
 ```rust
 let report = auth_rust::store::cleanup_expired(&pool).await?;
-// report.{magic_links_deleted, sessions_deleted, verify_attempts_deleted, total()}
+// report.{magic_links_deleted, sessions_deleted, verify_attempts_deleted,
+//         email_blocks_deleted, ip_blocks_deleted, total()}
 // The function emits its own `tracing::info!` with the counts — your `tracing-subscriber`
 // picks it up. No extra logging code needed.
 ```
@@ -259,11 +383,14 @@ The library emits `tracing` spans + events on every public operation. Plug in an
 | `warn!` | `outcome="rate_limited"` | verify per-IP cap hit |
 | `warn!` | `outcome="email_locked"` | 50/24h failed-attempt cap tripped |
 | `warn!` | `outcome="mailer_failed"` | mailer rejected send |
-| `debug!` | `outcome="format_invalid"\|"rate_limited_email"\|"rate_limited_ip"\|"policy_denied"` | silent drops in `issue_magic_link` |
-| `debug!` | `outcome="invalid_token"\|"wrong_code"\|"no_live_row"` | normal verify rejections |
+| `warn!` | `outcome="email_cap_hit"\|"ip_cap_hit"` | issue rate-limit tripped, email/IP block inserted |
+| `warn!` | `outcome="ip_permanent_block"` | repeat-offender IP escalated to permanent block |
+| `debug!` | `outcome="email_blocked"\|"ip_blocked"` | already-active block silent-drops the request |
+| `debug!` | `outcome="format_invalid"\|"policy_denied"` | other silent drops in `issue_magic_link` |
+| `debug!` | `outcome="invalid_token"\|"wrong_code"\|"no_live_row"\|"lost_consume_race"` | normal verify rejections |
 | `debug!` | `outcome="no_cookie"\|"lookup_miss"` | normal session lookup misses |
 
-**PII policy:** by default the `email` field contains only the domain (e.g. `gmail.com`) — full addresses don't reach Loki/Tempo. Flip `cfg.log_full_email = true` to log the complete address (useful for support debugging; remember the retention implications). Operator searching for a specific user can also use `user_id` (post-verify) or query the `users` table directly. Audit-grade events with full identifiers go through `SessionEventSink` (your audit log / SIEM), separate from observability stack. IP addresses are logged as standard for security investigations (GDPR "legitimate interest").
+**PII policy:** by default the `email` field contains only the domain (e.g. `gmail.com`) — full addresses don't reach Loki/Tempo. Pass `.log_full_email(true)` to the builder to log the complete address (useful for support debugging; remember the retention implications). Operator searching for a specific user can also use `user_id` (post-verify) or query the `users` table directly. Audit-grade events with full identifiers go through `SessionEventSink` (your audit log / SIEM), separate from observability stack. IP addresses are logged as standard for security investigations (GDPR "legitimate interest").
 
 **Filter example:** `RUST_LOG="info,auth_rust=debug"` (or via `tracing_subscriber::EnvFilter`) — sees all auth decisions including silent drops while keeping the rest of your app at INFO.
 

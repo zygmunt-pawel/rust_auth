@@ -40,9 +40,17 @@ pub async fn lookup_user_by_id(pool: &PgPool, user_id: UserId) -> Result<Option<
         "SELECT id, public_id, email, status, created_at FROM users WHERE id = $1"
     ).bind(user_id.0).fetch_optional(pool).await?;
 
-    Ok(row.and_then(|(id, public_id, email, status_str, created_at)| {
-        UserStatus::parse(&status_str).map(|status| User {
-            id: UserId(id), public_id, email, status, created_at,
-        })
-    }))
+    let Some((id, public_id, email, status_str, created_at)) = row else {
+        return Ok(None);
+    };
+
+    // Unparseable status = data integrity issue (DB CHECK should prevent it; if it
+    // doesn't, somebody altered the schema). Surface as Internal, not silent None —
+    // callers must distinguish "no such user" from "user exists but in unknown state".
+    let status = UserStatus::parse(&status_str).ok_or_else(|| {
+        tracing::error!(user_id = id, status = %status_str, "user has unparseable status");
+        AuthError::Internal(format!("user {id} has unknown status {status_str:?}"))
+    })?;
+
+    Ok(Some(User { id: UserId(id), public_id, email, status, created_at }))
 }

@@ -12,6 +12,9 @@
 //!   are already dead and no code path can resurrect them.
 //! - `auth_verify_attempts`: deleted after 5 minutes. The verify rate limit only reads
 //!   the last 60s, so 5 min keeps a small audit window.
+//! - `auth_email_blocks` / `auth_ip_blocks`: expired blocks deleted after 7 days
+//!   (kept for audit / repeat-offender escalation lookback). Permanent IP blocks
+//!   (`expires_at = 'infinity'`) are never deleted — they're the whole point.
 
 use sqlx::PgPool;
 
@@ -24,11 +27,17 @@ pub struct CleanupReport {
     pub magic_links_deleted: u64,
     pub sessions_deleted: u64,
     pub verify_attempts_deleted: u64,
+    pub email_blocks_deleted: u64,
+    pub ip_blocks_deleted: u64,
 }
 
 impl CleanupReport {
     pub fn total(&self) -> u64 {
-        self.magic_links_deleted + self.sessions_deleted + self.verify_attempts_deleted
+        self.magic_links_deleted
+            + self.sessions_deleted
+            + self.verify_attempts_deleted
+            + self.email_blocks_deleted
+            + self.ip_blocks_deleted
     }
 }
 
@@ -69,16 +78,40 @@ pub async fn cleanup_expired(pool: &PgPool) -> Result<CleanupReport, AuthError> 
     .await?
     .rows_affected();
 
+    // Permanent blocks (expires_at = 'infinity') survive — they were established
+    // intentionally and shouldn't be auto-purged.
+    let email_blocks_deleted = sqlx::query(
+        "DELETE FROM auth_email_blocks
+         WHERE expires_at < NOW() - INTERVAL '7 days'
+           AND expires_at < 'infinity'::timestamptz",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    let ip_blocks_deleted = sqlx::query(
+        "DELETE FROM auth_ip_blocks
+         WHERE expires_at < NOW() - INTERVAL '7 days'
+           AND expires_at < 'infinity'::timestamptz",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
     let report = CleanupReport {
         magic_links_deleted,
         sessions_deleted,
         verify_attempts_deleted,
+        email_blocks_deleted,
+        ip_blocks_deleted,
     };
 
     tracing::info!(
         magic_links = magic_links_deleted,
         sessions = sessions_deleted,
         verify_attempts = verify_attempts_deleted,
+        email_blocks = email_blocks_deleted,
+        ip_blocks = ip_blocks_deleted,
         total = report.total(),
         "auth cleanup pass complete"
     );

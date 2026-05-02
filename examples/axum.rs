@@ -176,13 +176,15 @@ async fn main() -> anyhow::Result<()> {
     auth_rust::store::migrator().run(&pool).await?;
 
     let pepper_b64 = std::env::var("AUTH_TOKEN_PEPPER")?;
-    let mut cfg = AuthConfig::new(&pepper_b64)?;
-    cfg.policy = Arc::new(
-        DisposableBlocklist::with_default_list()
-            .unblock("mailinator.com")  // example: carve out QA mailbox; remove for prod
-    );
-    cfg.event_sink = Arc::new(TracingSink);
-    cfg.same_site = SameSite::Strict;
+    let cfg = AuthConfig::builder(&pepper_b64)?
+        .policy(Arc::new(
+            DisposableBlocklist::with_default_list()
+                .unblock("mailinator.com"),  // example: carve out QA mailbox; remove for prod
+        ))
+        .event_sink(Arc::new(TracingSink))
+        .same_site(SameSite::Strict)
+        .build()?;
+    cfg.log_settings();
 
     let state = AppState {
         pool,

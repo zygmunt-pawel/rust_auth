@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use auth_rust::core::{
-    AuthConfig, Email, Mailer, MailerError, MagicLinkToken, Pepper, SameSite,
+    AuthConfig, AuthConfigBuilder, Email, Mailer, MailerError, MagicLinkToken, Pepper, SameSite,
     SessionEvent, SessionEventSink, VerifyCode,
 };
 
@@ -19,8 +19,16 @@ pub fn test_pepper() -> Pepper {
     Pepper::from_bytes([42u8; 32])
 }
 
+/// Default test config — same as production defaults, just with a fixed pepper.
 pub fn test_config() -> AuthConfig {
-    AuthConfig::from_pepper(test_pepper())
+    AuthConfig::builder_from_pepper(test_pepper())
+        .build()
+        .expect("default config must validate")
+}
+
+/// Builder pre-seeded with the test pepper, for tests that need to override fields.
+pub fn test_builder() -> AuthConfigBuilder {
+    AuthConfig::builder_from_pepper(test_pepper())
 }
 
 pub fn loopback_ip() -> IpAddr {

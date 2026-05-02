@@ -25,12 +25,17 @@ pub trait UserResolver: Send + Sync + 'static {
 #[async_trait]
 pub trait EmailPolicy: Send + Sync + 'static {
     async fn allow(&self, email: &Email) -> bool;
+
+    /// Short identifier surfaced by `AuthConfig::log_settings()`. Override if you want
+    /// your custom policy to show up in the startup log instead of the generic name.
+    fn name(&self) -> &'static str { "custom" }
 }
 
 pub struct AllowAll;
 #[async_trait]
 impl EmailPolicy for AllowAll {
     async fn allow(&self, _email: &Email) -> bool { true }
+    fn name(&self) -> &'static str { "AllowAll" }
 }
 
 #[derive(Debug, Clone)]

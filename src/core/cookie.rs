@@ -41,7 +41,9 @@ mod tests {
     use super::*;
     use crate::core::Pepper;
 
-    fn cfg() -> AuthConfig { AuthConfig::from_pepper(Pepper::from_bytes([0u8; 32])) }
+    fn cfg() -> AuthConfig {
+        AuthConfig::builder_from_pepper(Pepper::from_bytes([0u8; 32])).build().unwrap()
+    }
 
     #[test]
     fn set_cookie_has_required_flags() {

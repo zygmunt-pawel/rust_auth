@@ -39,15 +39,29 @@ pub enum MailerError {
     Permanent(Box<dyn std::error::Error + Send + Sync>),
 }
 
-impl<S: Into<String>> From<S> for MailerError {
-    fn from(s: S) -> Self {
-        struct Msg(String);
-        impl std::fmt::Debug for Msg { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) } }
-        impl std::fmt::Display for Msg { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) } }
-        impl std::error::Error for Msg {}
-        Self::Permanent(Box::new(Msg(s.into())))
+impl MailerError {
+    /// Build a permanent failure from any string-ish message.
+    /// Use for terminal errors (invalid recipient, suspended account, etc.).
+    pub fn permanent(msg: impl Into<String>) -> Self {
+        Self::Permanent(Box::new(StringErr(msg.into())))
+    }
+
+    /// Build a retryable failure from any string-ish message.
+    /// Use for transient errors (timeout, 5xx from provider, rate-limit).
+    pub fn retryable(msg: impl Into<String>) -> Self {
+        Self::Retryable(Box::new(StringErr(msg.into())))
     }
 }
+
+/// String wrapper that satisfies `std::error::Error` for the constructors above.
+struct StringErr(String);
+impl std::fmt::Debug for StringErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) }
+}
+impl std::fmt::Display for StringErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) }
+}
+impl std::error::Error for StringErr {}
 
 #[derive(Debug, Error)]
 pub enum ResolverError {

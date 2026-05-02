@@ -1,6 +1,6 @@
 mod common;
 
-use common::{loopback_ip, test_config, CapturingMailer, CapturingSink};
+use common::{loopback_ip, test_builder, test_config, CapturingMailer, CapturingSink};
 use auth_rust::core::{Email, VerifyCode, VerifyInput};
 use auth_rust::store::AutoSignupResolver;
 
@@ -82,8 +82,9 @@ async fn five_wrong_attempts_invalidates_row(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test]
-async fn email_with_50_failed_attempts_in_24h_is_locked(pool: sqlx::PgPool) {
-    // Seed 11 rows × 5 attempts = 55 failed attempts → above the 50 cap.
+async fn email_with_50_failed_attempts_in_24h_is_locked_when_opt_in(pool: sqlx::PgPool) {
+    // Account-level lockout is OPT-IN (default cap = 0 disables it). Here we explicitly
+    // turn it on (cap = 50) and confirm the lockout fires once exceeded.
     sqlx::query(
         "INSERT INTO magic_links (token_hash, code_hash, email, ip, expires_at, code_expires_at, code_attempts)
          SELECT
@@ -95,7 +96,7 @@ async fn email_with_50_failed_attempts_in_24h_is_locked(pool: sqlx::PgPool) {
          FROM generate_series(1, 11) g"
     ).execute(&pool).await.unwrap();
 
-    let cfg = test_config();
+    let cfg = test_builder().code_failures_per_email_24h_cap(50).build().unwrap();
     let sink = CapturingSink::new();
     let r = auth_rust::store::verify_magic_link_or_code(
         &pool,
@@ -106,4 +107,36 @@ async fn email_with_50_failed_attempts_in_24h_is_locked(pool: sqlx::PgPool) {
         loopback_ip(), None, &AutoSignupResolver, &cfg, &*sink,
     ).await;
     assert!(matches!(r, Err(auth_rust::core::AuthError::EmailLocked)));
+}
+
+#[sqlx::test]
+async fn lockout_disabled_by_default(pool: sqlx::PgPool) {
+    // With default config (cap = 0), even 100 wrong attempts must NOT return EmailLocked.
+    // Each row only allows 5 wrong attempts (code_burned_at) before falling through to
+    // InvalidToken — never EmailLocked.
+    let cfg = test_config();
+    assert_eq!(cfg.code_failures_per_email_24h_cap(), 0);
+
+    sqlx::query(
+        "INSERT INTO magic_links (token_hash, code_hash, email, ip, expires_at, code_expires_at, code_attempts)
+         SELECT
+            md5('t'||g)||md5('t'||g),
+            md5('c'||g)||md5('c'||g),
+            'unlocked@e.com', '127.0.0.1'::inet,
+            NOW() + INTERVAL '15 minutes', NOW() + INTERVAL '5 minutes',
+            5
+         FROM generate_series(1, 30) g"
+    ).execute(&pool).await.unwrap();
+
+    let sink = CapturingSink::new();
+    let r = auth_rust::store::verify_magic_link_or_code(
+        &pool,
+        VerifyInput::Code {
+            email: Email::try_from("unlocked@e.com".to_string()).unwrap(),
+            code: VerifyCode::from_string("123456".into()),
+        },
+        loopback_ip(), None, &AutoSignupResolver, &cfg, &*sink,
+    ).await;
+    assert!(matches!(r, Err(auth_rust::core::AuthError::InvalidToken)),
+        "with cap=0 the lockout never fires; got {r:?}");
 }

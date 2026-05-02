@@ -99,6 +99,15 @@ impl DisposableBlocklist {
     }
 }
 
+impl DisposableBlocklist {
+    /// Direct domain lookup against the blocked set, ignoring the per-instance allowlist.
+    /// Useful when composing your own [`EmailPolicy`] and you only want the disposable
+    /// check without `DisposableBlocklist::allow`'s full email-routing logic.
+    pub fn contains_domain(&self, domain: &str) -> bool {
+        self.blocked.contains(&domain.to_ascii_lowercase())
+    }
+}
+
 #[async_trait]
 impl EmailPolicy for DisposableBlocklist {
     async fn allow(&self, email: &Email) -> bool {
@@ -112,6 +121,8 @@ impl EmailPolicy for DisposableBlocklist {
         }
         !self.blocked.contains(domain)
     }
+
+    fn name(&self) -> &'static str { "DisposableBlocklist" }
 }
 
 #[cfg(test)]

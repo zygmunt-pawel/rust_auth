@@ -26,7 +26,7 @@ pub async fn issue_magic_link(
     let email_result = Email::try_from(email_input.to_string());
     let result = match email_result {
         Ok(email) => {
-            tracing::Span::current().record("email", email_for_log(&email, cfg));
+            tracing::Span::current().record("email", email.for_log(cfg.log_full_email));
             issue_inner(pool, &email, ip, cfg, mailer).await
         }
         Err(_) => {
@@ -47,16 +47,45 @@ async fn issue_inner(
     cfg: &AuthConfig,
     mailer: &dyn Mailer,
 ) -> Result<(), AuthError> {
-    if !rate_check_per_email(pool, email, cfg).await? {
-        tracing::Span::current().record("outcome", "rate_limited_email");
-        tracing::debug!(outcome = "rate_limited_email", "silent drop: per-email throttle");
+    // Active block check (cheap lookup, both checks short-circuit on first hit).
+    if email_is_blocked(pool, email).await? {
+        tracing::Span::current().record("outcome", "email_blocked");
+        tracing::debug!(outcome = "email_blocked", "silent drop: email under active block");
         return Ok(());
     }
-    if !rate_check_per_ip(pool, ip, cfg).await? {
-        tracing::Span::current().record("outcome", "rate_limited_ip");
-        tracing::debug!(outcome = "rate_limited_ip", "silent drop: per-ip throttle");
+    if ip_is_blocked(pool, ip).await? {
+        tracing::Span::current().record("outcome", "ip_blocked");
+        tracing::debug!(outcome = "ip_blocked", "silent drop: ip under active block");
         return Ok(());
     }
+
+    // Cap check: count mails sent for this email/IP in the rolling 30-min window.
+    // If we hit the cap, insert a block (does NOT extend an existing one) and silent-drop.
+    // Block events log email+ip explicitly so abuse triage in Loki/Grafana is trivial:
+    // `{outcome="email_cap_hit"} | json | line_format "{{.email}} {{.ip}}"`.
+    if email_cap_exceeded(pool, email, cfg).await? {
+        insert_email_block(pool, email, cfg).await?;
+        tracing::Span::current().record("outcome", "email_cap_hit");
+        tracing::warn!(
+            outcome = "email_cap_hit",
+            email = email.for_log(cfg.log_full_email),
+            %ip,
+            "email blocked: 30-min cap exceeded",
+        );
+        return Ok(());
+    }
+    if ip_cap_exceeded(pool, ip, cfg).await? {
+        insert_ip_block(pool, ip, cfg).await?;
+        tracing::Span::current().record("outcome", "ip_cap_hit");
+        tracing::warn!(
+            outcome = "ip_cap_hit",
+            email = email.for_log(cfg.log_full_email),
+            %ip,
+            "ip blocked: 30-min cap exceeded",
+        );
+        return Ok(());
+    }
+
     if !cfg.policy.allow(email).await {
         tracing::Span::current().record("outcome", "policy_denied");
         tracing::debug!(outcome = "policy_denied", "silent drop: EmailPolicy denied");
@@ -67,6 +96,18 @@ async fn issue_inner(
     let code = VerifyCode::generate();
     let token_hash = hmac_sha256_hex(&cfg.token_pepper, link_token.as_str());
     let code_hash = hmac_sha256_hex(&cfg.token_pepper, code.as_str());
+
+    // Invalidate all previously-live rows for this email — only the just-issued mail
+    // should be usable. Both link path and code path filter by `used_at IS NULL`, so
+    // a single UPDATE covers both. Match the user-intuition "newest mail wins"
+    // (Auth0 / Supabase pattern).
+    sqlx::query(
+        "UPDATE magic_links SET used_at = NOW()
+         WHERE email = $1 AND used_at IS NULL",
+    )
+    .bind(email.as_str())
+    .execute(pool)
+    .await?;
 
     sqlx::query(
         "INSERT INTO magic_links (token_hash, code_hash, email, ip, expires_at, code_expires_at)
@@ -103,62 +144,122 @@ async fn issue_inner(
     }
 }
 
-async fn rate_check_per_email(
+async fn email_is_blocked(pool: &PgPool, email: &Email) -> Result<bool, AuthError> {
+    let blocked: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM auth_email_blocks WHERE email = $1 AND expires_at > NOW())",
+    )
+    .bind(email.as_str())
+    .fetch_one(pool)
+    .await?;
+    Ok(blocked)
+}
+
+async fn ip_is_blocked(pool: &PgPool, ip: IpAddr) -> Result<bool, AuthError> {
+    let blocked: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM auth_ip_blocks WHERE ip = $1 AND expires_at > NOW())",
+    )
+    .bind(ip)
+    .fetch_one(pool)
+    .await?;
+    Ok(blocked)
+}
+
+async fn email_cap_exceeded(
     pool: &PgPool,
     email: &Email,
     cfg: &AuthConfig,
 ) -> Result<bool, AuthError> {
-    let row: Option<(bool, i64)> = sqlx::query_as(
-        "SELECT
-            EXISTS(SELECT 1 FROM magic_links WHERE email = $1 AND created_at > NOW() - $2),
-            (SELECT COUNT(*) FROM magic_links WHERE email = $1 AND created_at > NOW() - INTERVAL '24 hours')",
+    if cfg.issue_per_email_cap == 0 {
+        return Ok(false);
+    }
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM magic_links
+         WHERE email = $1 AND created_at > NOW() - $2",
     )
     .bind(email.as_str())
-    .bind(to_interval(cfg.issue_per_email_min_gap))
-    .fetch_optional(pool)
+    .bind(to_interval(cfg.issue_window))
+    .fetch_one(pool)
     .await?;
-    let (recent, daily) = row.unwrap_or((false, 0));
-    if recent {
-        return Ok(false);
-    }
-    if daily >= cfg.issue_per_email_24h_cap as i64 {
-        return Ok(false);
-    }
-    Ok(true)
+    Ok(count >= cfg.issue_per_email_cap as i64)
 }
 
-async fn rate_check_per_ip(pool: &PgPool, ip: IpAddr, cfg: &AuthConfig) -> Result<bool, AuthError> {
-    let hour: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT email) FROM magic_links WHERE ip = $1 AND created_at > NOW() - INTERVAL '1 hour'",
-    )
-    .bind(ip)
-    .fetch_one(pool)
-    .await?;
-    if hour >= cfg.issue_per_ip_1h_cap as i64 {
+async fn ip_cap_exceeded(
+    pool: &PgPool,
+    ip: IpAddr,
+    cfg: &AuthConfig,
+) -> Result<bool, AuthError> {
+    if cfg.issue_per_ip_cap == 0 {
         return Ok(false);
     }
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM magic_links
+         WHERE ip = $1 AND created_at > NOW() - $2",
+    )
+    .bind(ip)
+    .bind(to_interval(cfg.issue_window))
+    .fetch_one(pool)
+    .await?;
+    Ok(count >= cfg.issue_per_ip_cap as i64)
+}
 
-    let day: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT email) FROM magic_links WHERE ip = $1 AND created_at > NOW() - INTERVAL '24 hours'",
+async fn insert_email_block(
+    pool: &PgPool,
+    email: &Email,
+    cfg: &AuthConfig,
+) -> Result<(), AuthError> {
+    sqlx::query(
+        "INSERT INTO auth_email_blocks (email, expires_at) VALUES ($1, NOW() + $2)",
     )
-    .bind(ip)
-    .fetch_one(pool)
+    .bind(email.as_str())
+    .bind(to_interval(cfg.issue_block_duration))
+    .execute(pool)
     .await?;
-    if day >= cfg.issue_per_ip_24h_cap as i64 {
-        return Ok(false);
+    Ok(())
+}
+
+async fn insert_ip_block(pool: &PgPool, ip: IpAddr, cfg: &AuthConfig) -> Result<(), AuthError> {
+    // Escalation: if this IP has been blocked >= ip_permanent_block_threshold times in
+    // last 24h, the new block is permanent (expires_at = 'infinity'). Otherwise normal
+    // block_duration.
+    let recent_blocks: i64 = if cfg.ip_permanent_block_threshold > 0 {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM auth_ip_blocks
+             WHERE ip = $1 AND blocked_at > NOW() - INTERVAL '24 hours'",
+        )
+        .bind(ip)
+        .fetch_one(pool)
+        .await?
+    } else {
+        0
+    };
+
+    if cfg.ip_permanent_block_threshold > 0
+        && recent_blocks >= cfg.ip_permanent_block_threshold as i64
+    {
+        sqlx::query(
+            "INSERT INTO auth_ip_blocks (ip, expires_at) VALUES ($1, 'infinity'::timestamptz)",
+        )
+        .bind(ip)
+        .execute(pool)
+        .await?;
+        tracing::warn!(
+            outcome = "ip_permanent_block",
+            %ip,
+            recent_blocks,
+            "ip permanently blocked (repeat offender)",
+        );
+    } else {
+        sqlx::query(
+            "INSERT INTO auth_ip_blocks (ip, expires_at) VALUES ($1, NOW() + $2)",
+        )
+        .bind(ip)
+        .bind(to_interval(cfg.issue_block_duration))
+        .execute(pool)
+        .await?;
     }
-    Ok(true)
+    Ok(())
 }
 
 fn to_interval(d: Duration) -> PgInterval {
     PgInterval::try_from(d).expect("duration fits in PgInterval")
-}
-
-/// Pick what to log for the email field — full address or just domain — per cfg.
-fn email_for_log<'e>(email: &'e Email, cfg: &AuthConfig) -> &'e str {
-    if cfg.log_full_email {
-        email.as_str()
-    } else {
-        email.as_str().rsplit('@').next().unwrap_or("?")
-    }
 }

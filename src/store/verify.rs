@@ -48,7 +48,7 @@ pub async fn verify_magic_link_or_code(
         }
         VerifyInput::Code { email, code } => {
             tracing::Span::current().record("path", "code");
-            tracing::Span::current().record("email", email_for_log(&email, cfg));
+            tracing::Span::current().record("email", email.for_log(cfg.log_full_email));
             verify_by_code(pool, &email, &code, ip, user_agent, resolver, cfg, sink).await
         }
     };
@@ -97,21 +97,23 @@ async fn verify_by_token(
     let token_prefix: &str = &token_hash[..12];
 
     sqlx::query(
-        "UPDATE magic_links SET link_attempts = LEAST(link_attempts + 1, 10) WHERE token_hash = $1",
+        "UPDATE magic_links SET link_attempts = link_attempts + 1 WHERE token_hash = $1",
     )
     .bind(&token_hash)
     .execute(pool)
     .await?;
 
+    // `link_attempts <= $2` enforced via cfg (no magic numbers in SQL — config is SoT).
     let consumed: Option<(String,)> = sqlx::query_as(
         "UPDATE magic_links SET used_at = NOW()
          WHERE token_hash = $1
            AND used_at IS NULL
            AND expires_at > NOW()
-           AND link_attempts <= 3
+           AND link_attempts <= $2
          RETURNING email",
     )
     .bind(&token_hash)
+    .bind(cfg.link_attempts_per_token as i32)
     .fetch_optional(pool)
     .await?;
 
@@ -126,7 +128,7 @@ async fn verify_by_token(
 
     let email =
         Email::try_from(email_str).map_err(|_| AuthError::Internal("stored email invalid".into()))?;
-    tracing::Span::current().record("email", email_for_log(&email, cfg));
+    tracing::Span::current().record("email", email.for_log(cfg.log_full_email));
 
     let user_id = resolver
         .resolve_or_create(pool, &email)
@@ -159,40 +161,54 @@ async fn verify_by_code(
     cfg: &AuthConfig,
     sink: &dyn SessionEventSink,
 ) -> Result<(SessionToken, UserId), AuthError> {
-    // Global lockout check.
-    let total_failures: Option<i64> = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(code_attempts)::bigint, 0)
-         FROM magic_links
-         WHERE email = $1 AND created_at > NOW() - INTERVAL '24 hours'",
-    )
-    .bind(email.as_str())
-    .fetch_optional(pool)
-    .await?;
-    let failures = total_failures.unwrap_or(0);
-    if failures >= cfg.code_failures_per_email_24h_cap as i64 {
-        let _ = hmac_sha256_hex(&cfg.token_pepper, code.as_str()); // dummy HMAC for timing parity
-        tracing::Span::current().record("outcome", "email_locked");
-        tracing::warn!(outcome = "email_locked", failures_24h = failures, "email locked");
-        return Err(AuthError::EmailLocked);
+    // Global lockout check — only active when explicitly opted in (cap > 0).
+    // cap = 0 means "disabled" — see AuthConfig::code_failures_per_email_24h_cap docs.
+    if cfg.code_failures_per_email_24h_cap > 0 {
+        let total_failures: Option<i64> = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(code_attempts)::bigint, 0)
+             FROM magic_links
+             WHERE email = $1 AND created_at > NOW() - INTERVAL '24 hours'",
+        )
+        .bind(email.as_str())
+        .fetch_optional(pool)
+        .await?;
+        let failures = total_failures.unwrap_or(0);
+        if failures >= cfg.code_failures_per_email_24h_cap as i64 {
+            let _ = hmac_sha256_hex(&cfg.token_pepper, code.as_str()); // dummy HMAC for timing parity
+            tracing::Span::current().record("outcome", "email_locked");
+            tracing::warn!(outcome = "email_locked", failures_24h = failures, "email locked");
+            return Err(AuthError::EmailLocked);
+        }
     }
 
     let provided_hash = hmac_sha256_hex(&cfg.token_pepper, code.as_str());
 
+    // Note: burning the code via N wrong attempts sets `code_burned_at`, NOT `used_at`.
+    // The link path (verify_by_token) ignores `code_burned_at`, so an attacker who only
+    // knows the email cannot disable the magic link by spamming wrong codes.
+    // Outer WHERE re-checks `used_at IS NULL AND code_burned_at IS NULL` after the row
+    // lock fires — under concurrent verify_code calls, PG re-evaluates the outer WHERE
+    // (not the subselect) when unblocked, so a row burned/consumed by the winner is
+    // skipped by the loser instead of being incremented past the cap.
     let row: Option<(i64, String, i32)> = sqlx::query_as(
         "UPDATE magic_links
          SET code_attempts = code_attempts + 1,
-             used_at = CASE WHEN code_attempts + 1 >= 5 THEN NOW() ELSE used_at END
+             code_burned_at = CASE WHEN code_attempts + 1 >= $2 THEN NOW() ELSE code_burned_at END
          WHERE id = (
              SELECT id FROM magic_links
              WHERE email = $1
                AND used_at IS NULL
+               AND code_burned_at IS NULL
                AND code_expires_at > NOW()
              ORDER BY created_at DESC
              LIMIT 1
          )
+           AND used_at IS NULL
+           AND code_burned_at IS NULL
          RETURNING id, code_hash, code_attempts",
     )
     .bind(email.as_str())
+    .bind(cfg.code_attempts_per_row as i32)
     .fetch_optional(pool)
     .await?;
 
@@ -217,10 +233,19 @@ async fn verify_by_code(
         return Err(AuthError::InvalidToken);
     }
 
-    sqlx::query("UPDATE magic_links SET used_at = NOW() WHERE id = $1 AND used_at IS NULL")
+    // One-time-use enforcement: if a concurrent verify already consumed the row, this
+    // UPDATE matches 0 rows. Without the rows_affected check both racers would create a
+    // session for the same code consumption.
+    let consumed = sqlx::query("UPDATE magic_links SET used_at = NOW() WHERE id = $1 AND used_at IS NULL")
         .bind(row_id)
         .execute(pool)
-        .await?;
+        .await?
+        .rows_affected();
+    if consumed == 0 {
+        tracing::Span::current().record("outcome", "lost_consume_race");
+        tracing::debug!(outcome = "lost_consume_race", row_id, "code already consumed by concurrent verify");
+        return Err(AuthError::InvalidToken);
+    }
 
     let user_id = resolver
         .resolve_or_create(pool, email)
@@ -243,10 +268,3 @@ async fn verify_by_code(
     Ok((session.token, user_id))
 }
 
-fn email_for_log<'e>(email: &'e Email, cfg: &AuthConfig) -> &'e str {
-    if cfg.log_full_email {
-        email.as_str()
-    } else {
-        email.as_str().rsplit('@').next().unwrap_or("?")
-    }
-}

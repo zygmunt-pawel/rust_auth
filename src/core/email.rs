@@ -18,6 +18,17 @@ impl TryFrom<String> for Email {
 
 impl Email {
     pub fn as_str(&self) -> &str { &self.0 }
+
+    /// Either the full address or just the domain — toggled by `cfg.log_full_email`.
+    /// Used by every public op to keep PII out of observability stacks by default.
+    pub fn for_log(&self, log_full: bool) -> &str {
+        if log_full {
+            self.as_str()
+        } else {
+            // Email::try_from guarantees a single '@' is present, so rsplit always yields the domain.
+            self.as_str().rsplit('@').next().unwrap_or("?")
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 mod common;
 
-use common::{loopback_ip, test_config, CapturingSink};
+use common::{loopback_ip, test_builder, test_config, CapturingSink};
 use auth_rust::core::{MagicLinkToken, VerifyInput};
 use auth_rust::store::AutoSignupResolver;
 
@@ -31,8 +31,7 @@ async fn over_cap_returns_rate_limited(pool: sqlx::PgPool) {
 
 #[sqlx::test]
 async fn cap_zero_disables_check(pool: sqlx::PgPool) {
-    let mut cfg = test_config();
-    cfg.verify_per_ip_per_min_cap = 0;
+    let cfg = test_builder().verify_per_ip_per_min_cap(0).build().unwrap();
     let sink = CapturingSink::new();
 
     for n in 0..50 {
