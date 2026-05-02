@@ -1,8 +1,8 @@
 mod common;
 
-use common::{loopback_ip, test_builder, test_config, CapturingSink};
 use auth_rust::core::{MagicLinkToken, VerifyInput};
 use auth_rust::store::AutoSignupResolver;
+use common::{CapturingSink, loopback_ip, test_builder, test_config};
 
 #[sqlx::test]
 async fn over_cap_returns_rate_limited(pool: sqlx::PgPool) {
@@ -13,19 +13,33 @@ async fn over_cap_returns_rate_limited(pool: sqlx::PgPool) {
     for n in 0..29 {
         let token = MagicLinkToken::from_string(format!("bogus-token-{n:040}"));
         let r = auth_rust::store::verify_magic_link_or_code(
-            &pool, VerifyInput::Token(token), loopback_ip(), None,
-            &AutoSignupResolver, &cfg, &*sink,
-        ).await;
-        assert!(matches!(r, Err(auth_rust::core::AuthError::InvalidToken)),
-            "attempt {n} should be InvalidToken, got {r:?}");
+            &pool,
+            VerifyInput::Token(token),
+            loopback_ip(),
+            None,
+            &AutoSignupResolver,
+            &cfg,
+            &*sink,
+        )
+        .await;
+        assert!(
+            matches!(r, Err(auth_rust::core::AuthError::InvalidToken)),
+            "attempt {n} should be InvalidToken, got {r:?}"
+        );
     }
 
     // 30th: must be RateLimited.
     let token = MagicLinkToken::from_string("bogus-final-token-43-chars-padding-foo".into());
     let r = auth_rust::store::verify_magic_link_or_code(
-        &pool, VerifyInput::Token(token), loopback_ip(), None,
-        &AutoSignupResolver, &cfg, &*sink,
-    ).await;
+        &pool,
+        VerifyInput::Token(token),
+        loopback_ip(),
+        None,
+        &AutoSignupResolver,
+        &cfg,
+        &*sink,
+    )
+    .await;
     assert!(matches!(r, Err(auth_rust::core::AuthError::RateLimited)));
 }
 
@@ -37,9 +51,15 @@ async fn cap_zero_disables_check(pool: sqlx::PgPool) {
     for n in 0..50 {
         let token = MagicLinkToken::from_string(format!("bogus-{n:040}"));
         let r = auth_rust::store::verify_magic_link_or_code(
-            &pool, VerifyInput::Token(token), loopback_ip(), None,
-            &AutoSignupResolver, &cfg, &*sink,
-        ).await;
+            &pool,
+            VerifyInput::Token(token),
+            loopback_ip(),
+            None,
+            &AutoSignupResolver,
+            &cfg,
+            &*sink,
+        )
+        .await;
         // Always InvalidToken (never RateLimited because cap is 0 = disabled).
         assert!(matches!(r, Err(auth_rust::core::AuthError::InvalidToken)));
     }
@@ -55,13 +75,27 @@ async fn different_ips_have_independent_buckets(pool: sqlx::PgPool) {
     for n in 0..29 {
         let t = MagicLinkToken::from_string(format!("a-{n:040}"));
         let _ = auth_rust::store::verify_magic_link_or_code(
-            &pool, VerifyInput::Token(t), ip_a, None, &AutoSignupResolver, &cfg, &*sink,
-        ).await;
+            &pool,
+            VerifyInput::Token(t),
+            ip_a,
+            None,
+            &AutoSignupResolver,
+            &cfg,
+            &*sink,
+        )
+        .await;
     }
     // ip_a bucket is filling up. ip_b should still be allowed (independent bucket).
     let t = MagicLinkToken::from_string("b-first-bogus-43-chars-pad-pad-pad-pad-foo".into());
     let r = auth_rust::store::verify_magic_link_or_code(
-        &pool, VerifyInput::Token(t), ip_b, None, &AutoSignupResolver, &cfg, &*sink,
-    ).await;
+        &pool,
+        VerifyInput::Token(t),
+        ip_b,
+        None,
+        &AutoSignupResolver,
+        &cfg,
+        &*sink,
+    )
+    .await;
     assert!(matches!(r, Err(auth_rust::core::AuthError::InvalidToken)));
 }

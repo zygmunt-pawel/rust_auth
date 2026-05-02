@@ -28,22 +28,43 @@ pub trait EmailPolicy: Send + Sync + 'static {
 
     /// Short identifier surfaced by `AuthConfig::log_settings()`. Override if you want
     /// your custom policy to show up in the startup log instead of the generic name.
-    fn name(&self) -> &'static str { "custom" }
+    fn name(&self) -> &'static str {
+        "custom"
+    }
 }
 
 pub struct AllowAll;
 #[async_trait]
 impl EmailPolicy for AllowAll {
-    async fn allow(&self, _email: &Email) -> bool { true }
-    fn name(&self) -> &'static str { "AllowAll" }
+    async fn allow(&self, _email: &Email) -> bool {
+        true
+    }
+    fn name(&self) -> &'static str {
+        "AllowAll"
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
-    Created  { session_id: i64, user_id: i64, ip: std::net::IpAddr, user_agent: Option<String> },
-    Refreshed{ session_id: i64, user_id: i64 },
-    Rotated  { old_session_id: i64, new_session_id: i64, user_id: i64 },
-    Revoked  { session_id: i64, user_id: i64 },
+    Created {
+        session_id: i64,
+        user_id: i64,
+        ip: std::net::IpAddr,
+        user_agent: Option<String>,
+    },
+    Refreshed {
+        session_id: i64,
+        user_id: i64,
+    },
+    Rotated {
+        old_session_id: i64,
+        new_session_id: i64,
+        user_id: i64,
+    },
+    Revoked {
+        session_id: i64,
+        user_id: i64,
+    },
 }
 
 #[async_trait]

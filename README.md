@@ -8,10 +8,14 @@ auth_rust::store::issue_magic_link(&pool, "user@example.com", ip, &cfg, &mailer)
 let (session_token, _user_id) = auth_rust::store::verify_magic_link_or_code(
     &pool, input, ip, ua, &AutoSignupResolver, &cfg, &sink,
 ).await?;
-//      ↓ subsequent requests
+// Build the Set-Cookie header value and emit it on the verify response — the browser
+// stores it and brings it back on every subsequent request as the Cookie header.
+let set_cookie = auth_rust::core::cookie::session_cookie_header_value(&session_token, &cfg);
+//      ↓ subsequent requests pass the raw Cookie header in
 let (user, refresh_cookie) = auth_rust::store::authenticate_session(
     &pool, cookie_header, &cfg, &sink,
 ).await?;
+//   refresh_cookie is Some(...) when sliding TTL was bumped — re-emit as Set-Cookie.
 ```
 
 That's the whole flow. ~50 lines of glue wires it into axum/actix/anything — see `examples/axum.rs` for the full reference integration.

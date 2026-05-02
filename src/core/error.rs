@@ -23,8 +23,11 @@ pub enum AuthError {
 impl AuthError {
     pub fn http_status(&self) -> u16 {
         match self {
-            Self::InvalidToken | Self::TokenExpired | Self::TokenReused
-              | Self::Unauthorized | Self::EmailLocked => 401,
+            Self::InvalidToken
+            | Self::TokenExpired
+            | Self::TokenReused
+            | Self::Unauthorized
+            | Self::EmailLocked => 401,
             Self::RateLimited => 429,
             Self::MailerFailed | Self::Internal(_) => 500,
         }
@@ -56,10 +59,14 @@ impl MailerError {
 /// String wrapper that satisfies `std::error::Error` for the constructors above.
 struct StringErr(String);
 impl std::fmt::Debug for StringErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) }
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }
 impl std::fmt::Display for StringErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) }
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }
 impl std::error::Error for StringErr {}
 

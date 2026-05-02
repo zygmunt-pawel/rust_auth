@@ -57,7 +57,11 @@ pub async fn verify_magic_link_or_code(
     result
 }
 
-async fn verify_rate_check_ip(pool: &PgPool, ip: IpAddr, cfg: &AuthConfig) -> Result<bool, AuthError> {
+async fn verify_rate_check_ip(
+    pool: &PgPool,
+    ip: IpAddr,
+    cfg: &AuthConfig,
+) -> Result<bool, AuthError> {
     if cfg.verify_per_ip_per_min_cap == 0 {
         return Ok(true);
     }
@@ -96,12 +100,10 @@ async fn verify_by_token(
     let token_hash = hmac_sha256_hex(&cfg.token_pepper, token.as_str());
     let token_prefix: &str = &token_hash[..12];
 
-    sqlx::query(
-        "UPDATE magic_links SET link_attempts = link_attempts + 1 WHERE token_hash = $1",
-    )
-    .bind(&token_hash)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE magic_links SET link_attempts = link_attempts + 1 WHERE token_hash = $1")
+        .bind(&token_hash)
+        .execute(pool)
+        .await?;
 
     // `link_attempts <= $2` enforced via cfg (no magic numbers in SQL — config is SoT).
     let consumed: Option<(String,)> = sqlx::query_as(
@@ -121,13 +123,17 @@ async fn verify_by_token(
         Some((e,)) => e,
         None => {
             tracing::Span::current().record("outcome", "invalid_token");
-            tracing::debug!(outcome = "invalid_token", token_prefix, "token rejected (missing/expired/used/over-attempts)");
+            tracing::debug!(
+                outcome = "invalid_token",
+                token_prefix,
+                "token rejected (missing/expired/used/over-attempts)"
+            );
             return Err(AuthError::InvalidToken);
         }
     };
 
-    let email =
-        Email::try_from(email_str).map_err(|_| AuthError::Internal("stored email invalid".into()))?;
+    let email = Email::try_from(email_str)
+        .map_err(|_| AuthError::Internal("stored email invalid".into()))?;
     tracing::Span::current().record("email", email.for_log(cfg.log_full_email));
 
     let user_id = resolver
@@ -151,6 +157,7 @@ async fn verify_by_token(
     Ok((session.token, user_id))
 }
 
+#[allow(clippy::too_many_arguments)] // private helper; reshaping into a struct adds noise without value
 async fn verify_by_code(
     pool: &PgPool,
     email: &Email,
@@ -176,7 +183,11 @@ async fn verify_by_code(
         if failures >= cfg.code_failures_per_email_24h_cap as i64 {
             let _ = hmac_sha256_hex(&cfg.token_pepper, code.as_str()); // dummy HMAC for timing parity
             tracing::Span::current().record("outcome", "email_locked");
-            tracing::warn!(outcome = "email_locked", failures_24h = failures, "email locked");
+            tracing::warn!(
+                outcome = "email_locked",
+                failures_24h = failures,
+                "email locked"
+            );
             return Err(AuthError::EmailLocked);
         }
     }
@@ -236,14 +247,19 @@ async fn verify_by_code(
     // One-time-use enforcement: if a concurrent verify already consumed the row, this
     // UPDATE matches 0 rows. Without the rows_affected check both racers would create a
     // session for the same code consumption.
-    let consumed = sqlx::query("UPDATE magic_links SET used_at = NOW() WHERE id = $1 AND used_at IS NULL")
-        .bind(row_id)
-        .execute(pool)
-        .await?
-        .rows_affected();
+    let consumed =
+        sqlx::query("UPDATE magic_links SET used_at = NOW() WHERE id = $1 AND used_at IS NULL")
+            .bind(row_id)
+            .execute(pool)
+            .await?
+            .rows_affected();
     if consumed == 0 {
         tracing::Span::current().record("outcome", "lost_consume_race");
-        tracing::debug!(outcome = "lost_consume_race", row_id, "code already consumed by concurrent verify");
+        tracing::debug!(
+            outcome = "lost_consume_race",
+            row_id,
+            "code already consumed by concurrent verify"
+        );
         return Err(AuthError::InvalidToken);
     }
 
@@ -267,4 +283,3 @@ async fn verify_by_code(
     tracing::info!(outcome = "success", "verify_code success");
     Ok((session.token, user_id))
 }
-

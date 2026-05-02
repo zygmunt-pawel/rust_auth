@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use sqlx::postgres::types::PgInterval;
 use tracing::field;
 
-use crate::core::{AuthConfig, AuthError, Email, Mailer, MagicLinkToken, VerifyCode};
+use crate::core::{AuthConfig, AuthError, Email, MagicLinkToken, Mailer, VerifyCode};
 use crate::store::hash::hmac_sha256_hex;
 use crate::store::pad::{ISSUE_PAD, start_pad};
 
@@ -31,7 +31,10 @@ pub async fn issue_magic_link(
         }
         Err(_) => {
             tracing::Span::current().record("outcome", "format_invalid");
-            tracing::debug!(outcome = "format_invalid", "silent drop: invalid email format");
+            tracing::debug!(
+                outcome = "format_invalid",
+                "silent drop: invalid email format"
+            );
             Ok(())
         }
     };
@@ -50,7 +53,10 @@ async fn issue_inner(
     // Active block check (cheap lookup, both checks short-circuit on first hit).
     if email_is_blocked(pool, email).await? {
         tracing::Span::current().record("outcome", "email_blocked");
-        tracing::debug!(outcome = "email_blocked", "silent drop: email under active block");
+        tracing::debug!(
+            outcome = "email_blocked",
+            "silent drop: email under active block"
+        );
         return Ok(());
     }
     if ip_is_blocked(pool, ip).await? {
@@ -183,11 +189,7 @@ async fn email_cap_exceeded(
     Ok(count >= cfg.issue_per_email_cap as i64)
 }
 
-async fn ip_cap_exceeded(
-    pool: &PgPool,
-    ip: IpAddr,
-    cfg: &AuthConfig,
-) -> Result<bool, AuthError> {
+async fn ip_cap_exceeded(pool: &PgPool, ip: IpAddr, cfg: &AuthConfig) -> Result<bool, AuthError> {
     if cfg.issue_per_ip_cap == 0 {
         return Ok(false);
     }
@@ -207,13 +209,11 @@ async fn insert_email_block(
     email: &Email,
     cfg: &AuthConfig,
 ) -> Result<(), AuthError> {
-    sqlx::query(
-        "INSERT INTO auth_email_blocks (email, expires_at) VALUES ($1, NOW() + $2)",
-    )
-    .bind(email.as_str())
-    .bind(to_interval(cfg.issue_block_duration))
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO auth_email_blocks (email, expires_at) VALUES ($1, NOW() + $2)")
+        .bind(email.as_str())
+        .bind(to_interval(cfg.issue_block_duration))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -249,13 +249,11 @@ async fn insert_ip_block(pool: &PgPool, ip: IpAddr, cfg: &AuthConfig) -> Result<
             "ip permanently blocked (repeat offender)",
         );
     } else {
-        sqlx::query(
-            "INSERT INTO auth_ip_blocks (ip, expires_at) VALUES ($1, NOW() + $2)",
-        )
-        .bind(ip)
-        .bind(to_interval(cfg.issue_block_duration))
-        .execute(pool)
-        .await?;
+        sqlx::query("INSERT INTO auth_ip_blocks (ip, expires_at) VALUES ($1, NOW() + $2)")
+            .bind(ip)
+            .bind(to_interval(cfg.issue_block_duration))
+            .execute(pool)
+            .await?;
     }
     Ok(())
 }

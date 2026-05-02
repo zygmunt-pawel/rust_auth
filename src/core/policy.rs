@@ -68,6 +68,7 @@ impl DisposableBlocklist {
     }
 
     /// Add one domain to the blocklist (case-insensitive).
+    #[allow(clippy::should_implement_trait)] // builder-style `add`, not std::ops::Add
     pub fn add(mut self, domain: impl Into<String>) -> Self {
         self.blocked.insert(domain.into().to_ascii_lowercase());
         self
@@ -122,7 +123,9 @@ impl EmailPolicy for DisposableBlocklist {
         !self.blocked.contains(domain)
     }
 
-    fn name(&self) -> &'static str { "DisposableBlocklist" }
+    fn name(&self) -> &'static str {
+        "DisposableBlocklist"
+    }
 }
 
 #[cfg(test)]
@@ -166,8 +169,14 @@ mod tests {
     #[tokio::test]
     async fn add_iter_works() {
         let p = DisposableBlocklist::empty().add_iter(["a.example", "b.example"]);
-        assert!(!p.allow(&Email::try_from("u@a.example".to_string()).unwrap()).await);
-        assert!(!p.allow(&Email::try_from("u@b.example".to_string()).unwrap()).await);
+        assert!(
+            !p.allow(&Email::try_from("u@a.example".to_string()).unwrap())
+                .await
+        );
+        assert!(
+            !p.allow(&Email::try_from("u@b.example".to_string()).unwrap())
+                .await
+        );
     }
 
     #[tokio::test]

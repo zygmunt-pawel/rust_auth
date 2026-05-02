@@ -1,7 +1,7 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 use crate::core::{AuthError, Email, ResolverError, User, UserId, UserResolver, UserStatus};
 
@@ -23,7 +23,7 @@ impl UserResolver for AutoSignupResolver {
              SELECT id FROM ins
              UNION ALL
              SELECT id FROM users WHERE email = $1
-             LIMIT 1"
+             LIMIT 1",
         )
         .bind(email.as_str())
         .fetch_one(pool)
@@ -36,9 +36,11 @@ impl UserResolver for AutoSignupResolver {
 
 #[tracing::instrument(name = "auth.lookup_user_by_id", skip(pool), fields(user_id = user_id.0))]
 pub async fn lookup_user_by_id(pool: &PgPool, user_id: UserId) -> Result<Option<User>, AuthError> {
-    let row: Option<(i64, Uuid, String, String, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT id, public_id, email, status, created_at FROM users WHERE id = $1"
-    ).bind(user_id.0).fetch_optional(pool).await?;
+    let row: Option<(i64, Uuid, String, String, DateTime<Utc>)> =
+        sqlx::query_as("SELECT id, public_id, email, status, created_at FROM users WHERE id = $1")
+            .bind(user_id.0)
+            .fetch_optional(pool)
+            .await?;
 
     let Some((id, public_id, email, status_str, created_at)) = row else {
         return Ok(None);
@@ -52,5 +54,11 @@ pub async fn lookup_user_by_id(pool: &PgPool, user_id: UserId) -> Result<Option<
         AuthError::Internal(format!("user {id} has unknown status {status_str:?}"))
     })?;
 
-    Ok(Some(User { id: UserId(id), public_id, email, status, created_at }))
+    Ok(Some(User {
+        id: UserId(id),
+        public_id,
+        email,
+        status,
+        created_at,
+    }))
 }

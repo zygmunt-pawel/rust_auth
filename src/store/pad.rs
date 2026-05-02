@@ -8,7 +8,9 @@ pub(crate) struct PadGuard {
 }
 
 pub(crate) fn start_pad(target: Duration) -> PadGuard {
-    PadGuard { deadline: Instant::now() + target }
+    PadGuard {
+        deadline: Instant::now() + target,
+    }
 }
 
 impl PadGuard {

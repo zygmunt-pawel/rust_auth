@@ -10,7 +10,10 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::{Request, State},
-    http::{HeaderMap, StatusCode, header::{COOKIE, SET_COOKIE}},
+    http::{
+        HeaderMap, StatusCode,
+        header::{COOKIE, SET_COOKIE},
+    },
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -18,14 +21,14 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
-use auth_rust::core::{
-    AuthConfig, AuthError, AuthenticatedUser, DisposableBlocklist, Email, MagicLinkToken,
-    Mailer, MailerError, SameSite, SessionEvent, SessionEventSink, VerifyCode, VerifyInput,
-};
 use auth_rust::core::cookie::{session_cookie_clear_header_value, session_cookie_header_value};
+use auth_rust::core::{
+    AuthConfig, AuthError, AuthenticatedUser, DisposableBlocklist, Email, MagicLinkToken, Mailer,
+    MailerError, SameSite, SessionEvent, SessionEventSink, VerifyCode, VerifyInput,
+};
 use auth_rust::store::{
-    AutoSignupResolver, authenticate_session, delete_session, issue_magic_link,
-    lookup_user_by_id, rotate_session, verify_magic_link_or_code,
+    AutoSignupResolver, authenticate_session, delete_session, issue_magic_link, lookup_user_by_id,
+    verify_magic_link_or_code,
 };
 
 #[derive(Clone)]
@@ -46,7 +49,12 @@ impl Mailer for LogMailer {
         link: &MagicLinkToken,
         code: &VerifyCode,
     ) -> Result<(), MailerError> {
-        tracing::info!(email = email.as_str(), link = link.as_str(), code = code.as_str(), "mock_mail");
+        tracing::info!(
+            email = email.as_str(),
+            link = link.as_str(),
+            code = code.as_str(),
+            "mock_mail"
+        );
         Ok(())
     }
 }
@@ -65,18 +73,19 @@ struct ApiError(AuthError);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.0.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(self.0.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         status.into_response()
     }
 }
-impl From<AuthError> for ApiError { fn from(e: AuthError) -> Self { Self(e) } }
+impl From<AuthError> for ApiError {
+    fn from(e: AuthError) -> Self {
+        Self(e)
+    }
+}
 
 // ---------- middleware ----------
-async fn require_session(
-    State(state): State<AppState>,
-    mut req: Request,
-    next: Next,
-) -> Response {
+async fn require_session(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let cookie_header = req.headers().get(COOKIE).and_then(|v| v.to_str().ok());
     match authenticate_session(&state.pool, cookie_header, &state.cfg, &*state.sink).await {
         Ok((user, refresh_cookie)) => {
@@ -91,7 +100,9 @@ async fn require_session(
             let mut resp = StatusCode::UNAUTHORIZED.into_response();
             resp.headers_mut().insert(
                 SET_COOKIE,
-                session_cookie_clear_header_value(&state.cfg).parse().unwrap(),
+                session_cookie_clear_header_value(&state.cfg)
+                    .parse()
+                    .unwrap(),
             );
             resp
         }
@@ -100,7 +111,9 @@ async fn require_session(
 
 // ---------- handlers ----------
 #[derive(Deserialize)]
-struct MagicLinkRequest { email: String }
+struct MagicLinkRequest {
+    email: String,
+}
 
 async fn magic_link_handler(
     State(state): State<AppState>,
@@ -108,7 +121,8 @@ async fn magic_link_handler(
     Json(req): Json<MagicLinkRequest>,
 ) -> StatusCode {
     let ip = client_ip(&headers);
-    if let Err(e) = issue_magic_link(&state.pool, &req.email, ip, &state.cfg, &*state.mailer).await {
+    if let Err(e) = issue_magic_link(&state.pool, &req.email, ip, &state.cfg, &*state.mailer).await
+    {
         tracing::warn!(error = %e, "mailer failed");
     }
     StatusCode::OK
@@ -127,7 +141,9 @@ async fn verify_handler(
     Json(body): Json<VerifyBody>,
 ) -> Result<Response, ApiError> {
     let ip = client_ip(&headers);
-    let ua = headers.get(axum::http::header::USER_AGENT).and_then(|v| v.to_str().ok());
+    let ua = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok());
     let input = match body {
         VerifyBody::Token { token } => VerifyInput::Token(MagicLinkToken::from_string(token)),
         VerifyBody::Code { email, code } => VerifyInput::Code {
@@ -136,16 +152,20 @@ async fn verify_handler(
         },
     };
     let (token, _user_id) = verify_magic_link_or_code(
-        &state.pool, input, ip, ua, &AutoSignupResolver, &state.cfg, &*state.sink,
-    ).await?;
+        &state.pool,
+        input,
+        ip,
+        ua,
+        &AutoSignupResolver,
+        &state.cfg,
+        &*state.sink,
+    )
+    .await?;
     let cookie = session_cookie_header_value(&token, &state.cfg);
     Ok((StatusCode::OK, [(SET_COOKIE, cookie)]).into_response())
 }
 
-async fn logout_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
+async fn logout_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let cookie_header = headers.get(COOKIE).and_then(|v| v.to_str().ok());
     let _ = delete_session(&state.pool, cookie_header, &state.cfg, &*state.sink).await;
     let clear = session_cookie_clear_header_value(&state.cfg);
@@ -153,15 +173,22 @@ async fn logout_handler(
 }
 
 #[derive(Serialize)]
-struct MeResponse { id: i64, email: String }
+struct MeResponse {
+    id: i64,
+    email: String,
+}
 
 async fn me_handler(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<MeResponse>, ApiError> {
-    let u = lookup_user_by_id(&state.pool, user.id).await?
+    let u = lookup_user_by_id(&state.pool, user.id)
+        .await?
         .ok_or(AuthError::Unauthorized)?;
-    Ok(Json(MeResponse { id: u.id.0, email: u.email }))
+    Ok(Json(MeResponse {
+        id: u.id.0,
+        email: u.email,
+    }))
 }
 
 fn client_ip(_headers: &HeaderMap) -> IpAddr {
@@ -178,8 +205,7 @@ async fn main() -> anyhow::Result<()> {
     let pepper_b64 = std::env::var("AUTH_TOKEN_PEPPER")?;
     let cfg = AuthConfig::builder(&pepper_b64)?
         .policy(Arc::new(
-            DisposableBlocklist::with_default_list()
-                .unblock("mailinator.com"),  // example: carve out QA mailbox; remove for prod
+            DisposableBlocklist::with_default_list().unblock("mailinator.com"), // example: carve out QA mailbox; remove for prod
         ))
         .event_sink(Arc::new(TracingSink))
         .same_site(SameSite::Strict)
@@ -196,7 +222,10 @@ async fn main() -> anyhow::Result<()> {
     let protected = Router::new()
         .route("/auth/me", get(me_handler))
         .route("/auth/logout", post(logout_handler))
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_session));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_session,
+        ));
 
     let public = Router::new()
         .route("/auth/magic-link", post(magic_link_handler))
@@ -204,7 +233,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = public.merge(protected).with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([0,0,0,0], 3000))).await?;
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 3000))).await?;
     axum::serve(listener, app).await?;
     Ok(())
 }

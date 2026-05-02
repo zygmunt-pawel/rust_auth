@@ -9,15 +9,23 @@ impl TryFrom<String> for Email {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         let normalized = value.to_lowercase();
-        if normalized.len() < 3 || normalized.len() > 254 { return Err(EmailError); }
-        if !normalized.contains('@') { return Err(EmailError); }
-        if normalized.contains('\r') || normalized.contains('\n') { return Err(EmailError); }
+        if normalized.len() < 3 || normalized.len() > 254 {
+            return Err(EmailError);
+        }
+        if !normalized.contains('@') {
+            return Err(EmailError);
+        }
+        if normalized.contains('\r') || normalized.contains('\n') {
+            return Err(EmailError);
+        }
         Ok(Email(normalized))
     }
 }
 
 impl Email {
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 
     /// Either the full address or just the domain — toggled by `cfg.log_full_email`.
     /// Used by every public op to keep PII out of observability stacks by default.
@@ -41,15 +49,26 @@ mod tests {
         assert_eq!(e.as_str(), "user@example.com");
     }
 
-    #[test] fn rejects_too_short() { assert!(Email::try_from("a@".to_string()).is_err()); }
-    #[test] fn rejects_too_long() {
+    #[test]
+    fn rejects_too_short() {
+        assert!(Email::try_from("a@".to_string()).is_err());
+    }
+    #[test]
+    fn rejects_too_long() {
         let local = "a".repeat(250);
         assert!(Email::try_from(format!("{local}@b.co")).is_err());
     }
-    #[test] fn rejects_missing_at() { assert!(Email::try_from("nope".to_string()).is_err()); }
-    #[test] fn rejects_cr_lf() {
+    #[test]
+    fn rejects_missing_at() {
+        assert!(Email::try_from("nope".to_string()).is_err());
+    }
+    #[test]
+    fn rejects_cr_lf() {
         assert!(Email::try_from("u@e.co\n".to_string()).is_err());
         assert!(Email::try_from("u@\re.co".to_string()).is_err());
     }
-    #[test] fn accepts_valid() { assert!(Email::try_from("u@e.co".to_string()).is_ok()); }
+    #[test]
+    fn accepts_valid() {
+        assert!(Email::try_from("u@e.co".to_string()).is_ok());
+    }
 }

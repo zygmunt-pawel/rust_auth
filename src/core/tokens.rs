@@ -17,15 +17,27 @@ fn random_32_bytes_base64url() -> String {
 }
 
 impl MagicLinkToken {
-    pub fn generate() -> Self { Self(random_32_bytes_base64url()) }
-    pub fn as_str(&self) -> &str { &self.0 }
-    pub fn from_string(s: String) -> Self { Self(s) }
+    pub fn generate() -> Self {
+        Self(random_32_bytes_base64url())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    pub fn from_string(s: String) -> Self {
+        Self(s)
+    }
 }
 
 impl SessionToken {
-    pub fn generate() -> Self { Self(random_32_bytes_base64url()) }
-    pub fn as_str(&self) -> &str { &self.0 }
-    pub fn from_string(s: String) -> Self { Self(s) }
+    pub fn generate() -> Self {
+        Self(random_32_bytes_base64url())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    pub fn from_string(s: String) -> Self {
+        Self(s)
+    }
 }
 
 impl VerifyCode {
@@ -37,12 +49,18 @@ impl VerifyCode {
         let n = loop {
             OsRng.try_fill_bytes(&mut buf).expect("OsRng fill");
             let n = u32::from_le_bytes(buf);
-            if n < REJECT_THRESHOLD { break n; }
+            if n < REJECT_THRESHOLD {
+                break n;
+            }
         };
         Self(format!("{:06}", n % 1_000_000))
     }
-    pub fn as_str(&self) -> &str { &self.0 }
-    pub fn from_string(s: String) -> Self { Self(s) }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    pub fn from_string(s: String) -> Self {
+        Self(s)
+    }
 }
 
 #[cfg(test)]
@@ -53,7 +71,11 @@ mod tests {
     fn magic_link_token_is_43_chars_url_safe_base64() {
         let t = MagicLinkToken::generate();
         assert_eq!(t.as_str().len(), 43);
-        assert!(t.as_str().chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(
+            t.as_str()
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
     }
 
     #[test]
@@ -64,8 +86,14 @@ mod tests {
 
     #[test]
     fn tokens_are_unique() {
-        assert_ne!(MagicLinkToken::generate().as_str(), MagicLinkToken::generate().as_str());
-        assert_ne!(SessionToken::generate().as_str(), SessionToken::generate().as_str());
+        assert_ne!(
+            MagicLinkToken::generate().as_str(),
+            MagicLinkToken::generate().as_str()
+        );
+        assert_ne!(
+            SessionToken::generate().as_str(),
+            SessionToken::generate().as_str()
+        );
     }
 
     #[test]
@@ -83,6 +111,9 @@ mod tests {
         let codes: Vec<_> = (0..1000).map(|_| VerifyCode::generate()).collect();
         let zero_prefixed = codes.iter().filter(|c| c.as_str().starts_with('0')).count();
         // ~10% start with '0'. Wide window for randomness.
-        assert!(zero_prefixed > 50 && zero_prefixed < 200, "got {zero_prefixed}/1000");
+        assert!(
+            zero_prefixed > 50 && zero_prefixed < 200,
+            "got {zero_prefixed}/1000"
+        );
     }
 }

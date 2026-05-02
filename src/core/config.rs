@@ -120,25 +120,63 @@ impl AuthConfig {
 
     // ── read-only getters ────────────────────────────────────────────────────
 
-    pub fn cookie_name_suffix(&self) -> &str { &self.cookie_name_suffix }
-    pub fn same_site(&self) -> SameSite { self.same_site }
-    pub fn session_sliding_ttl(&self) -> Duration { self.session_sliding_ttl }
-    pub fn session_absolute_ttl(&self) -> Duration { self.session_absolute_ttl }
-    pub fn session_refresh_threshold(&self) -> Duration { self.session_refresh_threshold }
-    pub fn magic_link_ttl(&self) -> Duration { self.magic_link_ttl }
-    pub fn code_ttl(&self) -> Duration { self.code_ttl }
-    pub fn issue_per_email_cap(&self) -> u32 { self.issue_per_email_cap }
-    pub fn issue_per_ip_cap(&self) -> u32 { self.issue_per_ip_cap }
-    pub fn issue_window(&self) -> Duration { self.issue_window }
-    pub fn issue_block_duration(&self) -> Duration { self.issue_block_duration }
-    pub fn ip_permanent_block_threshold(&self) -> u32 { self.ip_permanent_block_threshold }
-    pub fn verify_per_ip_per_min_cap(&self) -> u32 { self.verify_per_ip_per_min_cap }
-    pub fn code_failures_per_email_24h_cap(&self) -> u32 { self.code_failures_per_email_24h_cap }
-    pub fn code_attempts_per_row(&self) -> u8 { self.code_attempts_per_row }
-    pub fn link_attempts_per_token(&self) -> u8 { self.link_attempts_per_token }
-    pub fn log_full_email(&self) -> bool { self.log_full_email }
-    pub fn policy(&self) -> &Arc<dyn EmailPolicy> { &self.policy }
-    pub fn event_sink(&self) -> &Arc<dyn SessionEventSink> { &self.event_sink }
+    pub fn cookie_name_suffix(&self) -> &str {
+        &self.cookie_name_suffix
+    }
+    pub fn same_site(&self) -> SameSite {
+        self.same_site
+    }
+    pub fn session_sliding_ttl(&self) -> Duration {
+        self.session_sliding_ttl
+    }
+    pub fn session_absolute_ttl(&self) -> Duration {
+        self.session_absolute_ttl
+    }
+    pub fn session_refresh_threshold(&self) -> Duration {
+        self.session_refresh_threshold
+    }
+    pub fn magic_link_ttl(&self) -> Duration {
+        self.magic_link_ttl
+    }
+    pub fn code_ttl(&self) -> Duration {
+        self.code_ttl
+    }
+    pub fn issue_per_email_cap(&self) -> u32 {
+        self.issue_per_email_cap
+    }
+    pub fn issue_per_ip_cap(&self) -> u32 {
+        self.issue_per_ip_cap
+    }
+    pub fn issue_window(&self) -> Duration {
+        self.issue_window
+    }
+    pub fn issue_block_duration(&self) -> Duration {
+        self.issue_block_duration
+    }
+    pub fn ip_permanent_block_threshold(&self) -> u32 {
+        self.ip_permanent_block_threshold
+    }
+    pub fn verify_per_ip_per_min_cap(&self) -> u32 {
+        self.verify_per_ip_per_min_cap
+    }
+    pub fn code_failures_per_email_24h_cap(&self) -> u32 {
+        self.code_failures_per_email_24h_cap
+    }
+    pub fn code_attempts_per_row(&self) -> u8 {
+        self.code_attempts_per_row
+    }
+    pub fn link_attempts_per_token(&self) -> u8 {
+        self.link_attempts_per_token
+    }
+    pub fn log_full_email(&self) -> bool {
+        self.log_full_email
+    }
+    pub fn policy(&self) -> &Arc<dyn EmailPolicy> {
+        &self.policy
+    }
+    pub fn event_sink(&self) -> &Arc<dyn SessionEventSink> {
+        &self.event_sink
+    }
 
     /// Final cookie name including __Host- prefix (always enforced).
     pub fn cookie_name(&self) -> String {
@@ -242,40 +280,105 @@ impl AuthConfigBuilder {
         }
     }
 
-    pub fn cookie_name_suffix(mut self, v: impl Into<String>) -> Self { self.cookie_name_suffix = Some(v.into()); self }
-    pub fn same_site(mut self, v: SameSite) -> Self { self.same_site = Some(v); self }
-    pub fn session_sliding_ttl(mut self, v: Duration) -> Self { self.session_sliding_ttl = Some(v); self }
-    pub fn session_absolute_ttl(mut self, v: Duration) -> Self { self.session_absolute_ttl = Some(v); self }
-    pub fn session_refresh_threshold(mut self, v: Duration) -> Self { self.session_refresh_threshold = Some(v); self }
-    pub fn magic_link_ttl(mut self, v: Duration) -> Self { self.magic_link_ttl = Some(v); self }
-    pub fn code_ttl(mut self, v: Duration) -> Self { self.code_ttl = Some(v); self }
-    pub fn issue_per_email_cap(mut self, v: u32) -> Self { self.issue_per_email_cap = Some(v); self }
-    pub fn issue_per_ip_cap(mut self, v: u32) -> Self { self.issue_per_ip_cap = Some(v); self }
-    pub fn issue_window(mut self, v: Duration) -> Self { self.issue_window = Some(v); self }
-    pub fn issue_block_duration(mut self, v: Duration) -> Self { self.issue_block_duration = Some(v); self }
-    pub fn ip_permanent_block_threshold(mut self, v: u32) -> Self { self.ip_permanent_block_threshold = Some(v); self }
-    pub fn verify_per_ip_per_min_cap(mut self, v: u32) -> Self { self.verify_per_ip_per_min_cap = Some(v); self }
-    pub fn code_failures_per_email_24h_cap(mut self, v: u32) -> Self { self.code_failures_per_email_24h_cap = Some(v); self }
-    pub fn code_attempts_per_row(mut self, v: u8) -> Self { self.code_attempts_per_row = Some(v); self }
-    pub fn link_attempts_per_token(mut self, v: u8) -> Self { self.link_attempts_per_token = Some(v); self }
-    pub fn policy(mut self, v: Arc<dyn EmailPolicy>) -> Self { self.policy = Some(v); self }
-    pub fn event_sink(mut self, v: Arc<dyn SessionEventSink>) -> Self { self.event_sink = Some(v); self }
-    pub fn log_full_email(mut self, v: bool) -> Self { self.log_full_email = Some(v); self }
+    pub fn cookie_name_suffix(mut self, v: impl Into<String>) -> Self {
+        self.cookie_name_suffix = Some(v.into());
+        self
+    }
+    pub fn same_site(mut self, v: SameSite) -> Self {
+        self.same_site = Some(v);
+        self
+    }
+    pub fn session_sliding_ttl(mut self, v: Duration) -> Self {
+        self.session_sliding_ttl = Some(v);
+        self
+    }
+    pub fn session_absolute_ttl(mut self, v: Duration) -> Self {
+        self.session_absolute_ttl = Some(v);
+        self
+    }
+    pub fn session_refresh_threshold(mut self, v: Duration) -> Self {
+        self.session_refresh_threshold = Some(v);
+        self
+    }
+    pub fn magic_link_ttl(mut self, v: Duration) -> Self {
+        self.magic_link_ttl = Some(v);
+        self
+    }
+    pub fn code_ttl(mut self, v: Duration) -> Self {
+        self.code_ttl = Some(v);
+        self
+    }
+    pub fn issue_per_email_cap(mut self, v: u32) -> Self {
+        self.issue_per_email_cap = Some(v);
+        self
+    }
+    pub fn issue_per_ip_cap(mut self, v: u32) -> Self {
+        self.issue_per_ip_cap = Some(v);
+        self
+    }
+    pub fn issue_window(mut self, v: Duration) -> Self {
+        self.issue_window = Some(v);
+        self
+    }
+    pub fn issue_block_duration(mut self, v: Duration) -> Self {
+        self.issue_block_duration = Some(v);
+        self
+    }
+    pub fn ip_permanent_block_threshold(mut self, v: u32) -> Self {
+        self.ip_permanent_block_threshold = Some(v);
+        self
+    }
+    pub fn verify_per_ip_per_min_cap(mut self, v: u32) -> Self {
+        self.verify_per_ip_per_min_cap = Some(v);
+        self
+    }
+    pub fn code_failures_per_email_24h_cap(mut self, v: u32) -> Self {
+        self.code_failures_per_email_24h_cap = Some(v);
+        self
+    }
+    pub fn code_attempts_per_row(mut self, v: u8) -> Self {
+        self.code_attempts_per_row = Some(v);
+        self
+    }
+    pub fn link_attempts_per_token(mut self, v: u8) -> Self {
+        self.link_attempts_per_token = Some(v);
+        self
+    }
+    pub fn policy(mut self, v: Arc<dyn EmailPolicy>) -> Self {
+        self.policy = Some(v);
+        self
+    }
+    pub fn event_sink(mut self, v: Arc<dyn SessionEventSink>) -> Self {
+        self.event_sink = Some(v);
+        self
+    }
+    pub fn log_full_email(mut self, v: bool) -> Self {
+        self.log_full_email = Some(v);
+        self
+    }
 
     /// Apply defaults, validate every invariant, and produce an immutable [`AuthConfig`].
     /// Returns `ConfigError::Invalid` for any constraint violation.
     pub fn build(self) -> Result<AuthConfig, ConfigError> {
         let cookie_name_suffix = self.cookie_name_suffix.unwrap_or_else(|| "session".into());
         let same_site = self.same_site.unwrap_or(SameSite::Strict);
-        let session_sliding_ttl = self.session_sliding_ttl.unwrap_or(Duration::from_secs(7 * 24 * 60 * 60));
-        let session_absolute_ttl = self.session_absolute_ttl.unwrap_or(Duration::from_secs(30 * 24 * 60 * 60));
-        let session_refresh_threshold = self.session_refresh_threshold.unwrap_or(Duration::from_secs(24 * 60 * 60));
+        let session_sliding_ttl = self
+            .session_sliding_ttl
+            .unwrap_or(Duration::from_secs(7 * 24 * 60 * 60));
+        let session_absolute_ttl = self
+            .session_absolute_ttl
+            .unwrap_or(Duration::from_secs(30 * 24 * 60 * 60));
+        let session_refresh_threshold = self
+            .session_refresh_threshold
+            .unwrap_or(Duration::from_secs(24 * 60 * 60));
         let magic_link_ttl = self.magic_link_ttl.unwrap_or(Duration::from_secs(15 * 60));
         let code_ttl = self.code_ttl.unwrap_or(Duration::from_secs(15 * 60));
         let issue_per_email_cap = self.issue_per_email_cap.unwrap_or(15);
         let issue_per_ip_cap = self.issue_per_ip_cap.unwrap_or(15);
         let issue_window = self.issue_window.unwrap_or(Duration::from_secs(30 * 60));
-        let issue_block_duration = self.issue_block_duration.unwrap_or(Duration::from_secs(30 * 60));
+        let issue_block_duration = self
+            .issue_block_duration
+            .unwrap_or(Duration::from_secs(30 * 60));
         let ip_permanent_block_threshold = self.ip_permanent_block_threshold.unwrap_or(3);
         let verify_per_ip_per_min_cap = self.verify_per_ip_per_min_cap.unwrap_or(30);
         let code_failures_per_email_24h_cap = self.code_failures_per_email_24h_cap.unwrap_or(0);
@@ -298,13 +401,19 @@ impl AuthConfigBuilder {
             return Err(ConfigError::Invalid("code_ttl must be > 0".into()));
         }
         if session_sliding_ttl.is_zero() {
-            return Err(ConfigError::Invalid("session_sliding_ttl must be > 0".into()));
+            return Err(ConfigError::Invalid(
+                "session_sliding_ttl must be > 0".into(),
+            ));
         }
         if session_refresh_threshold.is_zero() {
-            return Err(ConfigError::Invalid("session_refresh_threshold must be > 0".into()));
+            return Err(ConfigError::Invalid(
+                "session_refresh_threshold must be > 0".into(),
+            ));
         }
         if issue_block_duration.is_zero() {
-            return Err(ConfigError::Invalid("issue_block_duration must be > 0".into()));
+            return Err(ConfigError::Invalid(
+                "issue_block_duration must be > 0".into(),
+            ));
         }
         // Sanity range — DB no longer enforces an upper bound (config is source of truth),
         // but anything > 10 is OTP-policy nonsense and likely a typo.
@@ -325,7 +434,9 @@ impl AuthConfigBuilder {
             )));
         }
         if cookie_name_suffix.is_empty() {
-            return Err(ConfigError::Invalid("cookie_name_suffix must be non-empty".into()));
+            return Err(ConfigError::Invalid(
+                "cookie_name_suffix must be non-empty".into(),
+            ));
         }
 
         // ── cross-field invariants ──────────────────────────────────────────
@@ -386,7 +497,9 @@ mod tests {
 
     #[test]
     fn cookie_name_has_host_prefix() {
-        let cfg = AuthConfig::builder_from_pepper(test_pepper()).build().unwrap();
+        let cfg = AuthConfig::builder_from_pepper(test_pepper())
+            .build()
+            .unwrap();
         assert_eq!(cfg.cookie_name(), "__Host-session");
     }
 
@@ -400,15 +513,24 @@ mod tests {
 
     #[test]
     fn defaults_are_sane() {
-        let cfg = AuthConfig::builder_from_pepper(test_pepper()).build().unwrap();
+        let cfg = AuthConfig::builder_from_pepper(test_pepper())
+            .build()
+            .unwrap();
         assert_eq!(cfg.same_site(), SameSite::Strict);
-        assert_eq!(cfg.session_sliding_ttl(), Duration::from_secs(7 * 24 * 60 * 60));
+        assert_eq!(
+            cfg.session_sliding_ttl(),
+            Duration::from_secs(7 * 24 * 60 * 60)
+        );
         assert_eq!(cfg.issue_per_email_cap(), 15);
         assert_eq!(cfg.issue_per_ip_cap(), 15);
         assert_eq!(cfg.issue_window(), Duration::from_secs(30 * 60));
         assert_eq!(cfg.issue_block_duration(), Duration::from_secs(30 * 60));
         assert_eq!(cfg.ip_permanent_block_threshold(), 3);
-        assert_eq!(cfg.code_failures_per_email_24h_cap(), 0, "lockout disabled by default");
+        assert_eq!(
+            cfg.code_failures_per_email_24h_cap(),
+            0,
+            "lockout disabled by default"
+        );
         assert_eq!(cfg.code_attempts_per_row(), 5);
         assert_eq!(cfg.link_attempts_per_token(), 3);
         assert_eq!(cfg.magic_link_ttl(), Duration::from_secs(15 * 60));
@@ -419,10 +541,15 @@ mod tests {
     async fn default_policy_blocks_disposable() {
         // Regression guard: default policy must be DisposableBlocklist (fail-secure),
         // not AllowAll. If somebody flips this back to AllowAll, this test trips.
-        let cfg = AuthConfig::builder_from_pepper(test_pepper()).build().unwrap();
+        let cfg = AuthConfig::builder_from_pepper(test_pepper())
+            .build()
+            .unwrap();
         assert_eq!(cfg.policy().name(), "DisposableBlocklist");
         let bad = crate::core::Email::try_from("user@mailinator.com".to_string()).unwrap();
-        assert!(!cfg.policy().allow(&bad).await, "default policy must reject known disposable domain");
+        assert!(
+            !cfg.policy().allow(&bad).await,
+            "default policy must reject known disposable domain"
+        );
     }
 
     #[test]
@@ -433,9 +560,11 @@ mod tests {
 
     #[test]
     fn pepper_from_base64_rejects_wrong_length() {
-        let too_short = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0u8; 16]);
+        let too_short =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0u8; 16]);
         assert!(Pepper::from_base64(&too_short).is_err());
-        let too_long = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0u8; 64]);
+        let too_long =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0u8; 64]);
         assert!(Pepper::from_base64(&too_long).is_err());
     }
 
@@ -500,7 +629,10 @@ mod tests {
             let r = AuthConfig::builder_from_pepper(test_pepper())
                 .code_attempts_per_row(bad)
                 .build();
-            assert!(matches!(r, Err(ConfigError::Invalid(_))), "expected error for {bad}");
+            assert!(
+                matches!(r, Err(ConfigError::Invalid(_))),
+                "expected error for {bad}"
+            );
         }
         for ok in [1u8, 5, 10] {
             let r = AuthConfig::builder_from_pepper(test_pepper())
@@ -516,7 +648,10 @@ mod tests {
             let r = AuthConfig::builder_from_pepper(test_pepper())
                 .link_attempts_per_token(bad)
                 .build();
-            assert!(matches!(r, Err(ConfigError::Invalid(_))), "expected error for {bad}");
+            assert!(
+                matches!(r, Err(ConfigError::Invalid(_))),
+                "expected error for {bad}"
+            );
         }
         for ok in [1u8, 3, 10] {
             let r = AuthConfig::builder_from_pepper(test_pepper())

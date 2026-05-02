@@ -17,13 +17,17 @@ pub(crate) fn hmac_sha256_hex(pepper: &Pepper, plaintext: &str) -> String {
 fn hex_lower(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes { write!(s, "{b:02x}").unwrap(); }
+    for b in bytes {
+        write!(s, "{b:02x}").unwrap();
+    }
     s
 }
 
 /// Constant-time equal for two hex strings of equal length. Returns false if lengths differ.
 pub(crate) fn ct_eq_hex(a: &str, b: &str) -> bool {
-    if a.len() != b.len() { return false; }
+    if a.len() != b.len() {
+        return false;
+    }
     a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
@@ -36,7 +40,10 @@ mod tests {
         let p = Pepper::from_bytes([0u8; 32]);
         let h = hmac_sha256_hex(&p, "hello");
         assert_eq!(h.len(), 64);
-        assert!(h.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            h.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
     }
 
     #[test]

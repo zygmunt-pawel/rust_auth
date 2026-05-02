@@ -42,7 +42,9 @@ mod tests {
     use crate::core::Pepper;
 
     fn cfg() -> AuthConfig {
-        AuthConfig::builder_from_pepper(Pepper::from_bytes([0u8; 32])).build().unwrap()
+        AuthConfig::builder_from_pepper(Pepper::from_bytes([0u8; 32]))
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -67,7 +69,10 @@ mod tests {
 
     #[test]
     fn extracts_solo_cookie() {
-        assert_eq!(extract_session_cookie_value(Some("__Host-session=abc"), &cfg()), Some("abc"));
+        assert_eq!(
+            extract_session_cookie_value(Some("__Host-session=abc"), &cfg()),
+            Some("abc")
+        );
     }
 
     #[test]
@@ -83,6 +88,9 @@ mod tests {
         assert_eq!(extract_session_cookie_value(None, &cfg()), None);
         assert_eq!(extract_session_cookie_value(Some(""), &cfg()), None);
         assert_eq!(extract_session_cookie_value(Some("foo=bar"), &cfg()), None);
-        assert_eq!(extract_session_cookie_value(Some("__Host-session="), &cfg()), None);
+        assert_eq!(
+            extract_session_cookie_value(Some("__Host-session="), &cfg()),
+            None
+        );
     }
 }

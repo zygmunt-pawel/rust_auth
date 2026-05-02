@@ -8,10 +8,9 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use auth_rust::core::{
-    AuthConfig, AuthConfigBuilder, Email, Mailer, MailerError, MagicLinkToken, Pepper, SameSite,
+    AuthConfig, AuthConfigBuilder, Email, MagicLinkToken, Mailer, MailerError, Pepper,
     SessionEvent, SessionEventSink, VerifyCode,
 };
 
@@ -42,12 +41,20 @@ pub struct CapturingMailer {
 }
 
 impl CapturingMailer {
-    pub fn new() -> Arc<Self> { Arc::new(Self::default()) }
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
 
-    pub fn count(&self) -> usize { self.sent.lock().unwrap().len() }
+    pub fn count(&self) -> usize {
+        self.sent.lock().unwrap().len()
+    }
 
     pub fn last_for(&self, email: &str) -> Option<(String, String)> {
-        self.sent.lock().unwrap().iter().rev()
+        self.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
             .find(|(e, _, _)| e == email)
             .map(|(_, link, code)| (link.clone(), code.clone()))
     }
@@ -79,8 +86,12 @@ pub struct CapturingSink {
 }
 
 impl CapturingSink {
-    pub fn new() -> Arc<Self> { Arc::new(Self::default()) }
-    pub fn count(&self) -> usize { self.events.lock().unwrap().len() }
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+    pub fn count(&self) -> usize {
+        self.events.lock().unwrap().len()
+    }
 }
 
 #[async_trait::async_trait]
