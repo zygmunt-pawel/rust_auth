@@ -93,7 +93,7 @@ For protected routes wrap them with middleware that calls `store::authenticate_s
 
 ## Prerequisites
 
-- **Rust 1.85+** (edition 2024)
+- **Rust 1.88+** (edition 2024)
 - **Postgres 18+** — migration uses built-in `uuidv7()`. On 16/17, install the `pg_uuidv7` extension first.
 - A `Mailer` impl you provide (`lettre`, `resend`, `sendgrid`, mock-for-tests).
 - TLS in production (`Secure` cookie attribute requires HTTPS).
