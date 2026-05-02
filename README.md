@@ -16,6 +16,10 @@ let (user, refresh_cookie) = auth_rust::store::authenticate_session(
     &pool, cookie_header, &cfg, &sink,
 ).await?;
 //   refresh_cookie is Some(...) when sliding TTL was bumped — re-emit as Set-Cookie.
+//      ↓ logout — revoke server-side AND clear the browser cookie
+auth_rust::store::delete_session(&pool, cookie_header, &cfg, &sink).await?;
+let clear_cookie = auth_rust::core::cookie::session_cookie_clear_header_value(&cfg);
+// emit `clear_cookie` as Set-Cookie on the logout response (Max-Age=0 → browser drops it)
 ```
 
 That's the whole flow. ~50 lines of glue wires it into axum/actix/anything — see `examples/axum.rs` for the full reference integration.
