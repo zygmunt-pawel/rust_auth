@@ -108,6 +108,12 @@ jobs:
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # RUSTSEC-2023-0071: Marvin Attack on `rsa` crate — pulled in transitively by
+          # sqlx-mysql which our build excludes (default-features=false + only `postgres`
+          # feature). The crate is in Cargo.lock metadata but never compiled into our
+          # artifact. Upstream has no patch as of this writing. Re-evaluate when the
+          # `rsa` crate ships a constant-time fix.
+          ignore: RUSTSEC-2023-0071
 
   trivy:
     runs-on: ubuntu-latest

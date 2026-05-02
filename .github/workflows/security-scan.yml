@@ -20,6 +20,8 @@ jobs:
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # See ci.yml audit job for rationale on this advisory.
+          ignore: RUSTSEC-2023-0071
 
   trivy:
     runs-on: ubuntu-latest
