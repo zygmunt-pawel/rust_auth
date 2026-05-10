@@ -60,17 +60,25 @@ fn fixture() -> &'static Fixture {
 }
 
 fn jwks_body(kid: &str) -> Value {
+    jwks_keys(&[kid])
+}
+
+fn jwks_keys(kids: &[&str]) -> Value {
     let f = fixture();
-    json!({
-        "keys": [{
-            "kid": kid,
-            "kty": "RSA",
-            "alg": "RS256",
-            "use": "sig",
-            "n": f.n_b64,
-            "e": f.e_b64,
-        }]
-    })
+    let keys: Vec<Value> = kids
+        .iter()
+        .map(|kid| {
+            json!({
+                "kid": kid,
+                "kty": "RSA",
+                "alg": "RS256",
+                "use": "sig",
+                "n": f.n_b64,
+                "e": f.e_b64,
+            })
+        })
+        .collect();
+    json!({ "keys": keys })
 }
 
 async fn mock_with_kid(kid: &str) -> (MockServer, String) {
@@ -262,5 +270,162 @@ async fn malformed_token_rejected() {
     assert!(
         matches!(err, IdentityError::Invalid(_)),
         "want Invalid (malformed jwt), got {err:?}"
+    );
+}
+
+// ───────────────────────── JWKS cache + refresh ─────────────────────────
+
+#[tokio::test]
+async fn unknown_kid_triggers_refresh_then_success() {
+    // First GET: only KID_A (so the verifier's initial cache loads it).
+    // Subsequent GETs: KID_A + KID_B → second verify with KID_B succeeds via
+    // refresh-on-miss, demonstrating that an unknown kid drives a fetch.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jwks_keys(&["kid-a"])))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jwks_keys(&["kid-a", "kid-b"])))
+        .mount(&server)
+        .await;
+
+    let url = format!("{}/jwks", server.uri());
+    let verifier = GoogleIdTokenVerifier::with_jwks_url(AUDIENCE, url);
+
+    // Loads initial JWKS via 1st GET.
+    let token_a = mint_rs256("kid-a", &standard_claims(AUDIENCE, ISS));
+    verifier.verify(&token_a).await.expect("verify kid-a");
+
+    // KID_B not in cache → refresh fires → 2nd GET → KID_B present → success.
+    let token_b = mint_rs256("kid-b", &standard_claims(AUDIENCE, ISS));
+    verifier.verify(&token_b).await.expect("verify kid-b");
+
+    let received = server.received_requests().await.expect("requests recorded");
+    assert_eq!(
+        received.len(),
+        2,
+        "expected exactly 2 GETs (initial load + refresh-on-miss)"
+    );
+}
+
+#[tokio::test]
+async fn cache_hit_no_http_on_second_verify() {
+    let (server, url) = mock_with_kid(KID).await;
+    let verifier = GoogleIdTokenVerifier::with_jwks_url(AUDIENCE, url);
+    let token = mint_rs256(KID, &standard_claims(AUDIENCE, ISS));
+
+    verifier.verify(&token).await.expect("verify 1");
+    verifier.verify(&token).await.expect("verify 2");
+
+    let received = server.received_requests().await.expect("requests recorded");
+    assert_eq!(
+        received.len(),
+        1,
+        "expected exactly 1 GET (initial load); subsequent verify hits cache"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_unknown_kid_dedupe_one_fetch() {
+    // Slow JWKS response so concurrent verifiers all observe the cache miss
+    // before the first refresher finishes — exercising refresh_lock dedup.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jwks_body(KID))
+                .set_delay(std::time::Duration::from_millis(200)),
+        )
+        .mount(&server)
+        .await;
+    let url = format!("{}/jwks", server.uri());
+    let verifier = std::sync::Arc::new(GoogleIdTokenVerifier::with_jwks_url(AUDIENCE, url));
+    let token = std::sync::Arc::new(mint_rs256(KID, &standard_claims(AUDIENCE, ISS)));
+
+    let mut set = tokio::task::JoinSet::new();
+    for _ in 0..50 {
+        let v = verifier.clone();
+        let t = token.clone();
+        set.spawn(async move { v.verify(&t).await });
+    }
+    while let Some(r) = set.join_next().await {
+        r.expect("task join").expect("verify ok");
+    }
+
+    let received = server.received_requests().await.expect("requests recorded");
+    assert_eq!(
+        received.len(),
+        1,
+        "refresh_lock should serialize 50 concurrent unknown-kid verifies into 1 GET"
+    );
+}
+
+#[tokio::test]
+async fn failed_refresh_cooldown_suppresses_retries() {
+    // Mock returns 500 on every GET. First verify drives a refresh that fails
+    // and records last_failed_refresh; the second verify (within the 30s
+    // cooldown) short-circuits without any HTTP at all.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    let url = format!("{}/jwks", server.uri());
+    let verifier = GoogleIdTokenVerifier::with_jwks_url(AUDIENCE, url);
+    let token = mint_rs256(KID, &standard_claims(AUDIENCE, ISS));
+
+    let err1 = verifier.verify(&token).await.unwrap_err();
+    assert!(
+        matches!(err1, IdentityError::Transient(_)),
+        "want Transient on 500, got {err1:?}"
+    );
+    let err2 = verifier.verify(&token).await.unwrap_err();
+    assert!(
+        matches!(err2, IdentityError::Transient(ref m) if m.contains("cooldown")),
+        "want Transient(cooldown) on second attempt, got {err2:?}"
+    );
+
+    let received = server.received_requests().await.expect("requests recorded");
+    assert_eq!(
+        received.len(),
+        1,
+        "cooldown must prevent the second refresh from hitting Google"
+    );
+}
+
+#[tokio::test]
+async fn cache_control_max_age_respected() {
+    // Mock advertises max-age=2. After 2.1s the cache is stale and the next
+    // verify must hit HTTP again to refresh — even though the kid is still
+    // present in the cached state.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jwks_body(KID))
+                .insert_header("cache-control", "max-age=2"),
+        )
+        .mount(&server)
+        .await;
+    let url = format!("{}/jwks", server.uri());
+    let verifier = GoogleIdTokenVerifier::with_jwks_url(AUDIENCE, url);
+    let token = mint_rs256(KID, &standard_claims(AUDIENCE, ISS));
+
+    verifier.verify(&token).await.expect("verify 1");
+    tokio::time::sleep(std::time::Duration::from_millis(2_100)).await;
+    verifier.verify(&token).await.expect("verify 2 after TTL");
+
+    let received = server.received_requests().await.expect("requests recorded");
+    assert_eq!(
+        received.len(),
+        2,
+        "expired TTL must trigger a fresh GET on the next verify"
     );
 }
