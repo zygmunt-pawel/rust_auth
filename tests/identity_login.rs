@@ -10,7 +10,8 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use auth_rust::core::{
-    AuthError, Email, IdentityError, IdentityProvider, SessionEvent, VerifiedIdentity, VerifyInput,
+    AuthError, Email, IdentityError, IdentityProvider, IdentitySubject, ProviderId, SessionEvent,
+    VerifiedIdentity, VerifyInput,
 };
 use auth_rust::store::{AutoSignupResolver, complete_identity_login, verify_magic_link_or_code};
 use common::{CapturingMailer, CapturingSink, loopback_ip, test_config};
@@ -18,7 +19,7 @@ use common::{CapturingMailer, CapturingSink, loopback_ip, test_config};
 // ───────────────────────────── helpers ─────────────────────────────
 
 struct StubProvider {
-    provider_id: &'static str,
+    provider_id: ProviderId,
     response: Result<VerifiedIdentity, IdentityError>,
 }
 
@@ -31,7 +32,7 @@ impl StubProvider {
     }
     fn err(provider_id: &'static str, e: IdentityError) -> Self {
         Self {
-            provider_id,
+            provider_id: ProviderId(provider_id),
             response: Err(e),
         }
     }
@@ -39,7 +40,7 @@ impl StubProvider {
 
 #[async_trait]
 impl IdentityProvider for StubProvider {
-    fn provider_id(&self) -> &'static str {
+    fn provider_id(&self) -> ProviderId {
         self.provider_id
     }
     async fn verify(&self, _: &str) -> Result<VerifiedIdentity, IdentityError> {
@@ -49,8 +50,8 @@ impl IdentityProvider for StubProvider {
 
 fn google_identity(sub: &str, email: &str) -> VerifiedIdentity {
     VerifiedIdentity {
-        provider: "google",
-        subject: sub.into(),
+        provider: ProviderId("google"),
+        subject: IdentitySubject(sub.into()),
         email: Email::try_from(email.to_string()).expect("valid email"),
         email_verified: true,
         display_name: None,
@@ -60,8 +61,8 @@ fn google_identity(sub: &str, email: &str) -> VerifiedIdentity {
 
 fn apple_identity(sub: &str, email: &str) -> VerifiedIdentity {
     VerifiedIdentity {
-        provider: "apple",
-        subject: sub.into(),
+        provider: ProviderId("apple"),
+        subject: IdentitySubject(sub.into()),
         email: Email::try_from(email.to_string()).expect("valid email"),
         email_verified: true,
         display_name: None,

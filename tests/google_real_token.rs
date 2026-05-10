@@ -32,15 +32,15 @@ async fn verifies_real_google_id_token() {
         .await
         .expect("verify against real Google JWKS");
 
-    assert_eq!(identity.provider, "google");
+    assert_eq!(identity.provider.as_str(), "google");
     assert!(
         identity.email_verified,
         "Google must mark email_verified=true"
     );
-    assert!(!identity.subject.is_empty(), "sub claim required");
+    assert!(!identity.subject.as_str().is_empty(), "sub claim required");
     println!(
         "verified — sub={} email={} name={:?}",
-        identity.subject,
+        identity.subject.as_str(),
         identity.email.as_str(),
         identity.display_name
     );

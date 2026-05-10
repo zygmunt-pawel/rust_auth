@@ -20,7 +20,9 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
 
-use crate::core::{Email, IdentityError, IdentityProvider, VerifiedIdentity};
+use crate::core::{
+    Email, IdentityError, IdentityProvider, IdentitySubject, ProviderId, VerifiedIdentity,
+};
 
 const GOOGLE_JWKS_URL: &str = "https://www.googleapis.com/oauth2/v3/certs";
 const GOOGLE_ISS_ALLOWED: &[&str] = &["accounts.google.com", "https://accounts.google.com"];
@@ -302,8 +304,8 @@ impl GoogleIdTokenVerifier {
             .map_err(|e| IdentityError::Invalid(format!("malformed email claim: {e:?}")))?;
 
         Ok(VerifiedIdentity {
-            provider: "google",
-            subject: token_data.claims.sub,
+            provider: ProviderId("google"),
+            subject: IdentitySubject(token_data.claims.sub),
             email,
             email_verified: true,
             display_name: token_data.claims.name,
@@ -329,8 +331,8 @@ fn parse_max_age(headers: &HeaderMap) -> Option<Duration> {
 
 #[async_trait]
 impl IdentityProvider for GoogleIdTokenVerifier {
-    fn provider_id(&self) -> &'static str {
-        "google"
+    fn provider_id(&self) -> ProviderId {
+        ProviderId("google")
     }
 
     async fn verify(&self, raw_token: &str) -> Result<VerifiedIdentity, IdentityError> {

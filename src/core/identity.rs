@@ -13,11 +13,52 @@ use async_trait::async_trait;
 
 use crate::core::Email;
 
+/// Stable identifier of an external identity provider as stored in
+/// `auth_identities.provider`. The value must be a `'static` literal — providers
+/// hardcode it at build time (e.g. `ProviderId("google")`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProviderId(pub &'static str);
+
+impl ProviderId {
+    pub fn as_str(&self) -> &'static str {
+        self.0
+    }
+}
+
+impl From<&'static str> for ProviderId {
+    fn from(v: &'static str) -> Self {
+        Self(v)
+    }
+}
+
+/// Provider-issued stable user identifier (e.g. Google's `sub` claim). Opaque
+/// to this crate — never used as a join key on email, always on `(provider, subject)`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IdentitySubject(pub String);
+
+impl IdentitySubject {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for IdentitySubject {
+    fn from(v: String) -> Self {
+        Self(v)
+    }
+}
+
+impl From<&str> for IdentitySubject {
+    fn from(v: &str) -> Self {
+        Self(v.to_owned())
+    }
+}
+
 #[async_trait]
 pub trait IdentityProvider: Send + Sync + 'static {
-    /// Stable provider tag stored in `auth_identities.provider` (e.g. `"google"`).
+    /// Stable provider tag stored in `auth_identities.provider` (e.g. `ProviderId("google")`).
     /// MUST match the value set on `VerifiedIdentity::provider` returned by `verify`.
-    fn provider_id(&self) -> &'static str;
+    fn provider_id(&self) -> ProviderId;
 
     /// Validate a provider-issued credential (e.g. Google id_token JWT) and return
     /// the verified identity. The implementation is expected to enforce all
@@ -31,8 +72,8 @@ pub trait IdentityProvider: Send + Sync + 'static {
 /// link or create a local user.
 #[derive(Debug, Clone)]
 pub struct VerifiedIdentity {
-    pub provider: &'static str,
-    pub subject: String,
+    pub provider: ProviderId,
+    pub subject: IdentitySubject,
     pub email: Email,
     pub email_verified: bool,
     pub display_name: Option<String>,

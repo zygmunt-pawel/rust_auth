@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use sqlx::PgPool;
 
-use crate::core::{Email, MagicLinkToken, MailerError, ResolverError, UserId, VerifyCode};
+use crate::core::{
+    Email, IdentitySubject, MagicLinkToken, MailerError, ProviderId, ResolverError, SessionId,
+    UserId, VerifyCode,
+};
 
 #[async_trait]
 pub trait Mailer: Send + Sync + 'static {
@@ -47,32 +50,32 @@ impl EmailPolicy for AllowAll {
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     Created {
-        session_id: i64,
-        user_id: i64,
+        session_id: SessionId,
+        user_id: UserId,
         ip: std::net::IpAddr,
         user_agent: Option<String>,
     },
     Refreshed {
-        session_id: i64,
-        user_id: i64,
+        session_id: SessionId,
+        user_id: UserId,
     },
     Rotated {
-        old_session_id: i64,
-        new_session_id: i64,
-        user_id: i64,
+        old_session_id: SessionId,
+        new_session_id: SessionId,
+        user_id: UserId,
     },
     Revoked {
-        session_id: i64,
-        user_id: i64,
+        session_id: SessionId,
+        user_id: UserId,
     },
     /// Emitted when an external identity (e.g. Google, Apple) is attached to a
     /// user — either at first sign-in (new user) or when the same email matched
     /// an existing magic-link account (auto-link). Not emitted on subsequent
     /// logins via an already-linked identity.
     IdentityLinked {
-        user_id: i64,
-        provider: &'static str,
-        subject: String,
+        user_id: UserId,
+        provider: ProviderId,
+        subject: IdentitySubject,
     },
 }
 

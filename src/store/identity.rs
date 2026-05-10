@@ -40,7 +40,7 @@ pub async fn complete_identity_login(
     cfg: &AuthConfig,
     sink: &dyn SessionEventSink,
 ) -> Result<(SessionToken, UserId), AuthError> {
-    tracing::Span::current().record("provider", provider.provider_id());
+    tracing::Span::current().record("provider", provider.provider_id().as_str());
 
     // 1. Verify the provider-issued token. Map identity errors onto AuthError;
     //    transient (e.g. JWKS down) becomes Internal so the consumer surfaces
@@ -84,8 +84,8 @@ pub async fn complete_identity_login(
     // 2. Lookup existing identity by stable (provider, subject) key.
     let existing: Option<(i64,)> =
         sqlx::query_as("SELECT user_id FROM auth_identities WHERE provider = $1 AND subject = $2")
-            .bind(identity.provider)
-            .bind(&identity.subject)
+            .bind(identity.provider.as_str())
+            .bind(identity.subject.as_str())
             .fetch_optional(pool)
             .await?;
 
@@ -96,8 +96,8 @@ pub async fn complete_identity_login(
                 "UPDATE auth_identities SET last_login_at = NOW()
                  WHERE provider = $1 AND subject = $2",
             )
-            .bind(identity.provider)
-            .bind(&identity.subject)
+            .bind(identity.provider.as_str())
+            .bind(identity.subject.as_str())
             .execute(pool)
             .await?;
             (UserId(uid), false)
@@ -115,13 +115,13 @@ pub async fn complete_identity_login(
                  VALUES ($1, $2, $3, $4)",
             )
             .bind(user_id.0)
-            .bind(identity.provider)
-            .bind(&identity.subject)
+            .bind(identity.provider.as_str())
+            .bind(identity.subject.as_str())
             .bind(identity.email.as_str())
             .execute(pool)
             .await?;
             sink.on_event(SessionEvent::IdentityLinked {
-                user_id: user_id.0,
+                user_id,
                 provider: identity.provider,
                 subject: identity.subject.clone(),
             })
@@ -134,11 +134,11 @@ pub async fn complete_identity_login(
 
     // 4. Mint the session.
     let session = create_session(pool, user_id, ip, user_agent, cfg).await?;
-    tracing::Span::current().record("session_id", session.session_id);
+    tracing::Span::current().record("session_id", session.session_id.0);
 
     sink.on_event(SessionEvent::Created {
         session_id: session.session_id,
-        user_id: user_id.0,
+        user_id,
         ip,
         user_agent: user_agent.map(String::from),
     })

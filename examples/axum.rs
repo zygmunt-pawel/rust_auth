@@ -196,7 +196,7 @@ async fn me_handler(
         .ok_or(AuthError::Unauthorized)?;
     Ok(Json(MeResponse {
         id: u.id.0,
-        email: u.email,
+        email: u.email.as_str().to_owned(),
     }))
 }
 

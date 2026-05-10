@@ -140,8 +140,8 @@ async fn happy_path_returns_verified_identity() {
 
     let identity = verifier.verify(&token).await.expect("verify ok");
 
-    assert_eq!(identity.provider, "google");
-    assert_eq!(identity.subject, "google-user-123");
+    assert_eq!(identity.provider.as_str(), "google");
+    assert_eq!(identity.subject.as_str(), "google-user-123");
     assert_eq!(identity.email.as_str(), "alice@example.com");
     assert!(identity.email_verified);
     assert_eq!(identity.display_name.as_deref(), Some("Alice Example"));

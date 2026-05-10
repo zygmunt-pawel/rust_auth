@@ -14,13 +14,17 @@ pub use cookie::{
 };
 pub use email::{Email, EmailError};
 pub use error::{AuthError, MailerError, ResolverError};
-pub use identity::{IdentityError, IdentityProvider, VerifiedIdentity};
+pub use identity::{
+    IdentityError, IdentityProvider, IdentitySubject, ProviderId, VerifiedIdentity,
+};
 pub use policy::DisposableBlocklist;
 pub use tokens::{MagicLinkToken, SessionToken, VerifyCode};
 pub use traits::{
     AllowAll, EmailPolicy, Mailer, NoOpSink, SessionEvent, SessionEventSink, UserResolver,
 };
-pub use user::{ActiveSession, AuthenticatedUser, User, UserId, UserStatus};
+pub use user::{
+    ActiveSession, AuthenticatedUser, SessionId, User, UserId, UserPublicId, UserStatus,
+};
 
 #[derive(Debug, Clone)]
 pub enum VerifyInput {

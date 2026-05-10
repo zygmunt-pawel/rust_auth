@@ -189,5 +189,5 @@ async fn lookup_user_by_id_returns_user_after_signup(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert!(user.is_some());
-    assert_eq!(user.unwrap().email, "u@e.com");
+    assert_eq!(user.unwrap().email.as_str(), "u@e.com");
 }

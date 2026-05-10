@@ -7,12 +7,13 @@ use tracing::field;
 
 use crate::core::cookie::{extract_session_cookie_value, session_cookie_header_value};
 use crate::core::{
-    AuthConfig, AuthError, AuthenticatedUser, SessionEvent, SessionEventSink, SessionToken, UserId,
+    AuthConfig, AuthError, AuthenticatedUser, Email, SessionEvent, SessionEventSink, SessionId,
+    SessionToken, UserId, UserPublicId,
 };
 use crate::store::hash::hmac_sha256_hex;
 
 pub(crate) struct CreatedSession {
-    pub session_id: i64,
+    pub session_id: SessionId,
     pub token: SessionToken,
 }
 
@@ -42,7 +43,7 @@ pub(crate) async fn create_session(
     .await?;
 
     Ok(CreatedSession {
-        session_id: row.0,
+        session_id: SessionId(row.0),
         token,
     })
 }
@@ -140,11 +141,13 @@ pub async fn authenticate_session(
         ..
     } = row;
 
+    let email =
+        Email::try_from(email).map_err(|_| AuthError::Internal("stored email invalid".into()))?;
     let user = AuthenticatedUser {
         id: UserId(user_id),
-        public_id: user_public_id,
+        public_id: UserPublicId(user_public_id),
         email,
-        session_id,
+        session_id: SessionId(session_id),
     };
 
     if !needs_refresh {
@@ -169,8 +172,8 @@ pub async fn authenticate_session(
 
     if updated.is_some() {
         sink.on_event(SessionEvent::Refreshed {
-            session_id,
-            user_id,
+            session_id: SessionId(session_id),
+            user_id: UserId(user_id),
         })
         .await;
         let token_plain_for_cookie = SessionToken::from_string(plaintext.to_string());
@@ -194,7 +197,7 @@ pub async fn delete_session(
     cookie_header: Option<&str>,
     cfg: &AuthConfig,
     sink: &dyn SessionEventSink,
-) -> Result<Option<UserId>, AuthError> {
+) -> Result<Option<(SessionId, UserId)>, AuthError> {
     let Some(plaintext) = extract_session_cookie_value(cookie_header, cfg) else {
         tracing::Span::current().record("outcome", "no_cookie");
         return Ok(None);
@@ -213,11 +216,11 @@ pub async fn delete_session(
         tracing::Span::current().record("outcome", "revoked");
         tracing::info!(outcome = "revoked", "session revoked");
         sink.on_event(SessionEvent::Revoked {
-            session_id,
-            user_id,
+            session_id: SessionId(session_id),
+            user_id: UserId(user_id),
         })
         .await;
-        return Ok(Some(UserId(user_id)));
+        return Ok(Some((SessionId(session_id), UserId(user_id))));
     }
     tracing::Span::current().record("outcome", "no_match");
     Ok(None)
@@ -302,9 +305,9 @@ pub async fn rotate_session(
     );
 
     sink.on_event(SessionEvent::Rotated {
-        old_session_id: old_id,
-        new_session_id: new_id,
-        user_id,
+        old_session_id: SessionId(old_id),
+        new_session_id: SessionId(new_id),
+        user_id: UserId(user_id),
     })
     .await;
     Ok(new_token)

@@ -3,7 +3,9 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::core::{AuthError, Email, ResolverError, User, UserId, UserResolver, UserStatus};
+use crate::core::{
+    AuthError, Email, ResolverError, User, UserId, UserPublicId, UserResolver, UserStatus,
+};
 
 pub struct AutoSignupResolver;
 
@@ -54,9 +56,12 @@ pub async fn lookup_user_by_id(pool: &PgPool, user_id: UserId) -> Result<Option<
         AuthError::Internal(format!("user {id} has unknown status {status_str:?}"))
     })?;
 
+    let email =
+        Email::try_from(email).map_err(|_| AuthError::Internal("stored email invalid".into()))?;
+
     Ok(Some(User {
         id: UserId(id),
-        public_id,
+        public_id: UserPublicId(public_id),
         email,
         status,
         created_at,

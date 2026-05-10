@@ -143,10 +143,10 @@ async fn verify_by_token(
     tracing::Span::current().record("user_id", user_id.0);
 
     let session = create_session(pool, user_id, ip, user_agent, cfg).await?;
-    tracing::Span::current().record("session_id", session.session_id);
+    tracing::Span::current().record("session_id", session.session_id.0);
     sink.on_event(SessionEvent::Created {
         session_id: session.session_id,
-        user_id: user_id.0,
+        user_id,
         ip,
         user_agent: user_agent.map(String::from),
     })
@@ -270,10 +270,10 @@ async fn verify_by_code(
     tracing::Span::current().record("user_id", user_id.0);
 
     let session = create_session(pool, user_id, ip, user_agent, cfg).await?;
-    tracing::Span::current().record("session_id", session.session_id);
+    tracing::Span::current().record("session_id", session.session_id.0);
     sink.on_event(SessionEvent::Created {
         session_id: session.session_id,
-        user_id: user_id.0,
+        user_id,
         ip,
         user_agent: user_agent.map(String::from),
     })
