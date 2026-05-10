@@ -161,3 +161,31 @@ CREATE TABLE auth_ip_blocks (
 );
 
 CREATE INDEX idx_auth_ip_blocks_active ON auth_ip_blocks (ip, expires_at);
+
+-- ────────────────────── auth_identities ────────────────────────────
+-- External identity providers linked to users (Google, later Apple/GitHub).
+-- (provider, subject) is the stable identity key — `subject` is the provider's
+-- opaque user id (e.g. Google `sub` claim); never reused, never changes for a
+-- given user. Email is mutable on the provider side, so it is NOT used for
+-- matching — only stored as `email_at_link` for forensics.
+--
+-- ON DELETE CASCADE: if a user is deleted, their external identities go too.
+
+CREATE TABLE auth_identities (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider        TEXT   NOT NULL,
+    subject         TEXT   NOT NULL,
+    email_at_link   TEXT   NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_login_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT auth_identities_provider_subject_uniq UNIQUE (provider, subject),
+    CONSTRAINT auth_identities_email_format CHECK (
+        length(email_at_link) BETWEEN 3 AND 254
+        AND email_at_link LIKE '%@%'
+        AND email_at_link = lower(email_at_link)
+    )
+);
+
+CREATE INDEX idx_auth_identities_user ON auth_identities (user_id);

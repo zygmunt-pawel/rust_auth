@@ -1,5 +1,6 @@
 -- Reverse 20260501000000_auth_init.up.sql in dependency order.
 
+DROP TABLE IF EXISTS auth_identities;
 DROP TABLE IF EXISTS auth_ip_blocks;
 DROP TABLE IF EXISTS auth_email_blocks;
 DROP TABLE IF EXISTS auth_verify_attempts;

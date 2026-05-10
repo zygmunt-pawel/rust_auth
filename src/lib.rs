@@ -19,4 +19,5 @@
 //! for monolith deployments. If you need stateless, fork.
 
 pub mod core;
+pub mod providers;
 pub mod store;

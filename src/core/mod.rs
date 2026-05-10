@@ -2,6 +2,7 @@ pub mod config;
 pub mod cookie;
 pub mod email;
 pub mod error;
+pub mod identity;
 pub mod policy;
 pub mod tokens;
 pub mod traits;
@@ -13,6 +14,7 @@ pub use cookie::{
 };
 pub use email::{Email, EmailError};
 pub use error::{AuthError, MailerError, ResolverError};
+pub use identity::{IdentityError, IdentityProvider, VerifiedIdentity};
 pub use policy::DisposableBlocklist;
 pub use tokens::{MagicLinkToken, SessionToken, VerifyCode};
 pub use traits::{
