@@ -32,7 +32,7 @@ uuid = { version = "=1.23.1", features = ["v7", "serde"] }
 
 # Optional — enabled by `google` feature.
 reqwest = { version = "=0.13.3", default-features = false, features = ["rustls", "json"], optional = true }
-jsonwebtoken = { version = "=10.3.0", default-features = false, optional = true }
+jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["use_pem", "aws_lc_rs"], optional = true }
 
 [dev-dependencies]
 anyhow = "=1.0.102"
@@ -46,3 +46,6 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
 # Used by tests/google_verifier.rs to mint test JWTs against a wiremock JWKS.
 wiremock = "=0.6.5"
 rsa = { version = "=0.9.6", features = ["sha2"] }
+# rsa 0.9.6 needs an RngCore from rand_core 0.6.x; the main `rand` 0.9 in
+# regular deps is incompatible. Aliased dev-only dep at 0.8.5 to bridge.
+rand08 = { package = "rand", version = "=0.8.5" }
