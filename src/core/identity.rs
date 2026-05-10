@@ -39,7 +39,7 @@ pub struct VerifiedIdentity {
     pub picture_url: Option<String>,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum IdentityError {
     #[error("token invalid: {0}")]
     Invalid(String),
