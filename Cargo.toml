@@ -12,7 +12,7 @@ authors = ["Paweł Zygmunt"]
 default = []
 # Enables the Google Sign-In identity provider (`providers::google`). Pulls
 # reqwest + jsonwebtoken into the dependency graph; default builds add nothing.
-google = ["dep:reqwest", "dep:jsonwebtoken"]
+google = ["dep:reqwest", "dep:jsonwebtoken", "tokio/sync"]
 
 [dependencies]
 async-trait = "=0.1.89"
