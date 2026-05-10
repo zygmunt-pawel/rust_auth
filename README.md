@@ -542,7 +542,7 @@ All state in Postgres. Two app instances with same `DATABASE_URL` + same pepper 
 
 ### Cleanup
 
-`magic_links` rows accumulate. Run nightly (e.g. `pg_cron` or sidecar):
+`magic_links`, `auth_verify_attempts`, expired `sessions` and `auth_*_blocks` rows accumulate. The library ships `store::cleanup_expired(&pool)` to purge them but **does not run it for you** — scheduling is a deployment concern, not a library concern (multi-replica deployments would otherwise have every pod racing on the same DELETE; the library has no knowledge of your topology or shutdown story). Pick one of the patterns below.
 
 ```rust
 let report = auth_rust::store::cleanup_expired(&pool).await?;
@@ -552,7 +552,66 @@ let report = auth_rust::store::cleanup_expired(&pool).await?;
 // picks it up. No extra logging code needed.
 ```
 
-Hardcoded sensible windows: `magic_links` older than 7 days (preserves the 24h lockout window + forensics buffer), `sessions` past `absolute_expires_at`, `auth_verify_attempts` older than 5 min.
+Hardcoded sensible windows: `magic_links` older than 7 days (preserves the 24h lockout window + forensics buffer), `sessions` past `absolute_expires_at`, `auth_verify_attempts` older than 5 min, `auth_email_blocks` / `auth_ip_blocks` 7 days past `expires_at` (permanent `'infinity'` blocks survive forever — manual `DELETE` to lift).
+
+**Crash safety.** `cleanup_expired` is idempotent — each statement is a `WHERE expires_at < NOW()` (or equivalent) DELETE, so re-running on the same data finds nothing to do. SIGKILL / pod eviction mid-run rolls back only the in-flight DELETE (Postgres atomicity); the next scheduled run picks up whatever remained. No queue, no resume state — just schedule it again.
+
+**Pattern A — `pg_cron` (simplest if your Postgres has the extension).** One job, runs on the database server itself, zero coordination needed across app replicas:
+
+```sql
+-- Daily at 03:17 UTC. Adjust schedule and statements to your retention preference;
+-- this duplicates the exact DELETEs from cleanup_expired() so the lib doesn't even
+-- need to be in the call path.
+SELECT cron.schedule('auth-cleanup', '17 3 * * *', $$
+    DELETE FROM magic_links            WHERE created_at < NOW() - INTERVAL '7 days';
+    DELETE FROM sessions               WHERE absolute_expires_at < NOW();
+    DELETE FROM auth_verify_attempts   WHERE attempted_at < NOW() - INTERVAL '5 minutes';
+    DELETE FROM auth_email_blocks      WHERE expires_at < NOW() - INTERVAL '7 days' AND expires_at < 'infinity'::timestamptz;
+    DELETE FROM auth_ip_blocks         WHERE expires_at < NOW() - INTERVAL '7 days' AND expires_at < 'infinity'::timestamptz;
+$$);
+```
+
+**Pattern B — Kubernetes `CronJob` (or systemd timer / GitHub Actions schedule).** Single-shot invocation outside the long-running app process. Build a tiny `cleanup` bin in your service that calls `cleanup_expired` and exits, then:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: auth-cleanup }
+spec:
+  schedule: "17 3 * * *"
+  concurrencyPolicy: Forbid          # never two passes at once
+  successfulJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: cleanup
+              image: your-app:latest
+              command: ["/usr/local/bin/your-app", "auth-cleanup"]
+              envFrom: [{ secretRef: { name: app-secrets } }]   # DATABASE_URL
+```
+
+**Pattern C — in-process `tokio::spawn` (acceptable for single-replica / dev / small apps).** Cheapest to wire up. Acceptable when you run **exactly one** instance; with N replicas you get N concurrent passes per tick — harmless but wasteful, and the only way to deduplicate is an advisory lock:
+
+```rust
+let pool_cleanup = pool.clone();
+tokio::spawn(async move {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tick.tick().await;                                       // skip the immediate first tick
+    loop {
+        tick.tick().await;
+        // Optional dedup for N>1 replicas: wrap in pg_try_advisory_lock so only one wins.
+        if let Err(e) = auth_rust::store::cleanup_expired(&pool_cleanup).await {
+            tracing::warn!(error = %e, "auth cleanup pass failed; will retry next tick");
+        }
+    }
+});
+```
+
+Whatever you pick, **schedule something** — without cleanup, `auth_verify_attempts` grows unbounded under any real traffic (one row per verify attempt, kept for the 60-second rate-limit lookback).
 
 ### Observability
 
