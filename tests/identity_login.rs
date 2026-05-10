@@ -98,7 +98,11 @@ async fn brand_new_user_creates_user_identity_and_session(pool: PgPool) {
     assert!(user_id.0 > 0);
 
     assert_eq!(
-        count(&pool, "SELECT COUNT(*) FROM users WHERE email = 'alice@example.com'").await,
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM users WHERE email = 'alice@example.com'"
+        )
+        .await,
         1
     );
     assert_eq!(
@@ -190,7 +194,14 @@ async fn second_google_login_reuses_identity(pool: PgPool) {
     let provider = StubProvider::ok(google_identity("sub-google-3", "bob@example.com"));
 
     let (_, first_user_id) = complete_identity_login(
-        &pool, &provider, "t", loopback_ip(), None, &AutoSignupResolver, &cfg, &*sink,
+        &pool,
+        &provider,
+        "t",
+        loopback_ip(),
+        None,
+        &AutoSignupResolver,
+        &cfg,
+        &*sink,
     )
     .await
     .expect("first login");
@@ -199,7 +210,14 @@ async fn second_google_login_reuses_identity(pool: PgPool) {
     let identities_before = count(&pool, "SELECT COUNT(*) FROM auth_identities").await;
 
     let (_, second_user_id) = complete_identity_login(
-        &pool, &provider, "t", loopback_ip(), None, &AutoSignupResolver, &cfg, &*sink,
+        &pool,
+        &provider,
+        "t",
+        loopback_ip(),
+        None,
+        &AutoSignupResolver,
+        &cfg,
+        &*sink,
     )
     .await
     .expect("second login");
@@ -226,21 +244,38 @@ async fn different_email_creates_second_user(pool: PgPool) {
 
     let alice = StubProvider::ok(google_identity("sub-google-4", "alice@example.com"));
     let (_, alice_id) = complete_identity_login(
-        &pool, &alice, "t", loopback_ip(), None, &AutoSignupResolver, &cfg, &*sink,
+        &pool,
+        &alice,
+        "t",
+        loopback_ip(),
+        None,
+        &AutoSignupResolver,
+        &cfg,
+        &*sink,
     )
     .await
     .unwrap();
 
     let bob = StubProvider::ok(google_identity("sub-google-5", "bob@example.com"));
     let (_, bob_id) = complete_identity_login(
-        &pool, &bob, "t", loopback_ip(), None, &AutoSignupResolver, &cfg, &*sink,
+        &pool,
+        &bob,
+        "t",
+        loopback_ip(),
+        None,
+        &AutoSignupResolver,
+        &cfg,
+        &*sink,
     )
     .await
     .unwrap();
 
     assert_ne!(alice_id.0, bob_id.0, "different emails → different users");
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM users").await, 2);
-    assert_eq!(count(&pool, "SELECT COUNT(*) FROM auth_identities").await, 2);
+    assert_eq!(
+        count(&pool, "SELECT COUNT(*) FROM auth_identities").await,
+        2
+    );
 }
 
 #[sqlx::test]
@@ -250,14 +285,24 @@ async fn email_not_verified_returns_unauthorized(pool: PgPool) {
     let provider = StubProvider::err("google", IdentityError::EmailNotVerified);
 
     let err = complete_identity_login(
-        &pool, &provider, "t", loopback_ip(), None, &AutoSignupResolver, &cfg, &*sink,
+        &pool,
+        &provider,
+        "t",
+        loopback_ip(),
+        None,
+        &AutoSignupResolver,
+        &cfg,
+        &*sink,
     )
     .await
     .unwrap_err();
 
     assert!(matches!(err, AuthError::Unauthorized), "got {err:?}");
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM users").await, 0);
-    assert_eq!(count(&pool, "SELECT COUNT(*) FROM auth_identities").await, 0);
+    assert_eq!(
+        count(&pool, "SELECT COUNT(*) FROM auth_identities").await,
+        0
+    );
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM sessions").await, 0);
     assert_eq!(sink.events.lock().unwrap().len(), 0);
 }
@@ -269,14 +314,24 @@ async fn invalid_token_returns_unauthorized(pool: PgPool) {
     let provider = StubProvider::err("google", IdentityError::Invalid("bad signature".into()));
 
     let err = complete_identity_login(
-        &pool, &provider, "t", loopback_ip(), None, &AutoSignupResolver, &cfg, &*sink,
+        &pool,
+        &provider,
+        "t",
+        loopback_ip(),
+        None,
+        &AutoSignupResolver,
+        &cfg,
+        &*sink,
     )
     .await
     .unwrap_err();
 
     assert!(matches!(err, AuthError::Unauthorized), "got {err:?}");
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM users").await, 0);
-    assert_eq!(count(&pool, "SELECT COUNT(*) FROM auth_identities").await, 0);
+    assert_eq!(
+        count(&pool, "SELECT COUNT(*) FROM auth_identities").await,
+        0
+    );
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM sessions").await, 0);
 }
 
@@ -289,19 +344,39 @@ async fn two_providers_same_email_share_user(pool: PgPool) {
 
     let google = StubProvider::ok(google_identity("sub-google-6", "carol@example.com"));
     let (_, google_uid) = complete_identity_login(
-        &pool, &google, "t", loopback_ip(), None, &AutoSignupResolver, &cfg, &*sink,
+        &pool,
+        &google,
+        "t",
+        loopback_ip(),
+        None,
+        &AutoSignupResolver,
+        &cfg,
+        &*sink,
     )
     .await
     .unwrap();
 
     let apple = StubProvider::ok(apple_identity("sub-apple-1", "carol@example.com"));
     let (_, apple_uid) = complete_identity_login(
-        &pool, &apple, "t", loopback_ip(), None, &AutoSignupResolver, &cfg, &*sink,
+        &pool,
+        &apple,
+        "t",
+        loopback_ip(),
+        None,
+        &AutoSignupResolver,
+        &cfg,
+        &*sink,
     )
     .await
     .unwrap();
 
-    assert_eq!(google_uid.0, apple_uid.0, "both providers link to same user");
+    assert_eq!(
+        google_uid.0, apple_uid.0,
+        "both providers link to same user"
+    );
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM users").await, 1);
-    assert_eq!(count(&pool, "SELECT COUNT(*) FROM auth_identities").await, 2);
+    assert_eq!(
+        count(&pool, "SELECT COUNT(*) FROM auth_identities").await,
+        2
+    );
 }

@@ -155,7 +155,10 @@ async fn happy_path_returns_verified_identity() {
 async fn wrong_audience_rejected() {
     let (_server, url) = mock_with_kid(KID).await;
     let verifier = GoogleIdTokenVerifier::with_jwks_url(AUDIENCE, url);
-    let token = mint_rs256(KID, &standard_claims("other-client.apps.googleusercontent.com", ISS));
+    let token = mint_rs256(
+        KID,
+        &standard_claims("other-client.apps.googleusercontent.com", ISS),
+    );
 
     let err = verifier.verify(&token).await.unwrap_err();
     assert!(
@@ -168,7 +171,10 @@ async fn wrong_audience_rejected() {
 async fn wrong_issuer_rejected() {
     let (_server, url) = mock_with_kid(KID).await;
     let verifier = GoogleIdTokenVerifier::with_jwks_url(AUDIENCE, url);
-    let token = mint_rs256(KID, &standard_claims(AUDIENCE, "https://accounts.example.com"));
+    let token = mint_rs256(
+        KID,
+        &standard_claims(AUDIENCE, "https://accounts.example.com"),
+    );
 
     let err = verifier.verify(&token).await.unwrap_err();
     assert!(
@@ -263,10 +269,7 @@ async fn malformed_token_rejected() {
     let (_server, url) = mock_with_kid(KID).await;
     let verifier = GoogleIdTokenVerifier::with_jwks_url(AUDIENCE, url);
 
-    let err = verifier
-        .verify("not-a-jwt-at-all")
-        .await
-        .unwrap_err();
+    let err = verifier.verify("not-a-jwt-at-all").await.unwrap_err();
     assert!(
         matches!(err, IdentityError::Invalid(_)),
         "want Invalid (malformed jwt), got {err:?}"

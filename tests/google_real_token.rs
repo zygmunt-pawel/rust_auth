@@ -22,8 +22,7 @@ use auth_rust::providers::google::GoogleIdTokenVerifier;
 #[tokio::test]
 #[ignore = "manual: needs GOOGLE_CLIENT_ID + GOOGLE_TEST_ID_TOKEN env"]
 async fn verifies_real_google_id_token() {
-    let audience =
-        std::env::var("GOOGLE_CLIENT_ID").expect("GOOGLE_CLIENT_ID env var required");
+    let audience = std::env::var("GOOGLE_CLIENT_ID").expect("GOOGLE_CLIENT_ID env var required");
     let token =
         std::env::var("GOOGLE_TEST_ID_TOKEN").expect("GOOGLE_TEST_ID_TOKEN env var required");
 
@@ -34,7 +33,10 @@ async fn verifies_real_google_id_token() {
         .expect("verify against real Google JWKS");
 
     assert_eq!(identity.provider, "google");
-    assert!(identity.email_verified, "Google must mark email_verified=true");
+    assert!(
+        identity.email_verified,
+        "Google must mark email_verified=true"
+    );
     assert!(!identity.subject.is_empty(), "sub claim required");
     println!(
         "verified — sub={} email={} name={:?}",

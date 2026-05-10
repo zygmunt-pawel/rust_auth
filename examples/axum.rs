@@ -106,8 +106,7 @@ async fn require_session(State(state): State<AppState>, mut req: Request, next: 
                 AuthError::AccountSuspended => "account_suspended",
                 _ => "unauthorized",
             };
-            let mut resp =
-                (StatusCode::UNAUTHORIZED, Json(AuthErrorBody { code })).into_response();
+            let mut resp = (StatusCode::UNAUTHORIZED, Json(AuthErrorBody { code })).into_response();
             resp.headers_mut().insert(
                 SET_COOKIE,
                 session_cookie_clear_header_value(&state.cfg)
