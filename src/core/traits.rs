@@ -65,6 +65,15 @@ pub enum SessionEvent {
         session_id: i64,
         user_id: i64,
     },
+    /// Emitted when an external identity (e.g. Google, Apple) is attached to a
+    /// user — either at first sign-in (new user) or when the same email matched
+    /// an existing magic-link account (auto-link). Not emitted on subsequent
+    /// logins via an already-linked identity.
+    IdentityLinked {
+        user_id: i64,
+        provider: &'static str,
+        subject: String,
+    },
 }
 
 #[async_trait]
