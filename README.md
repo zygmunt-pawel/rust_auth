@@ -262,24 +262,100 @@ Default `NoOpSink` — no events emitted.
 
 Optional second sign-in path next to magic-link, behind the `google` Cargo feature. The library validates Google-issued `id_token` JWTs locally (signature against cached JWKS, `iss` / `aud` / `exp` / `email_verified`) and mints a session — same `__Host-` cookie, same Postgres `sessions` row, same `SessionEventSink` events. No `client_secret`, no token-endpoint round-trip — the frontend SDK already delivered the `id_token`.
 
-### Requirements
+End-to-end flow:
 
-- OAuth 2.0 Client ID in [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (type: **Web application** for browser, the platform-specific equivalent for mobile).
-- Frontend SDK that delivers an `id_token` to your backend:
-  - Web: [Google Identity Services (GIS)](https://developers.google.com/identity/gsi/web/guides/overview) — the "Sign in with Google" button or One Tap. Enable FedCM (`use_fedcm_for_prompt: true`) for new apps.
-  - Android: [Credential Manager](https://developer.android.com/identity/sign-in/credential-manager-siwg).
-  - iOS: [Google Sign-In SDK](https://developers.google.com/identity/sign-in/ios).
-- Scope `openid email profile` (the `openid` scope is what makes Google return an `id_token` at all).
-- Enable the feature: `auth_rust = { …, features = ["google"] }`.
+```
+[Browser] ─click "Sign in with Google"──▶ [Google] ─id_token─▶ [Browser]
+                                                                   │
+                                                            POST /auth/google
+                                                          {"id_token": "eyJ..."}
+                                                                   ▼
+                                                       [Your backend + auth_rust]
+                                                              │
+                                                ┌─────────────┴─────────────┐
+                                                ▼                           ▼
+                                  GoogleIdTokenVerifier::verify   complete_identity_login
+                                  (RS256 + JWKS + iss/aud/exp)    (link by (provider,sub),
+                                                                   create session row)
+                                                              │
+                                                              ▼
+                                                  Set-Cookie: __Host-session=...
+```
 
-### Wire it up (axum)
+### 1. Set up the Google Cloud Console
+
+One-time setup. Skip if you already have an OAuth Client ID for this app.
+
+1. Open [console.cloud.google.com](https://console.cloud.google.com/) → pick or create a project.
+2. **APIs & Services → OAuth consent screen** — fill in app name, support email, and at least the `email` and `profile` scopes. For testing, leave "User type" on **External** with your account in **Test users**.
+3. **APIs & Services → Credentials → Create Credentials → OAuth client ID** → type **Web application**.
+4. Add **Authorized JavaScript origins** for every host that will render the button:
+   - `http://localhost:3000` (dev)
+   - `https://yourapp.example.com` (prod)
+   Google checks origins exactly — `http://127.0.0.1` is NOT the same as `http://localhost`.
+5. **Authorized redirect URIs** — leave empty. The id_token flow does not redirect; Google returns the credential to a JS callback.
+6. Save → copy the **Client ID** (looks like `1234567890-abc...apps.googleusercontent.com`). This is what you pass to `GoogleIdTokenVerifier::new(...)` AND embed in the frontend button. The Client Secret is **not used** by this flow.
+
+### 2. Add the Sign-In button to your frontend
+
+Drop this anywhere in your HTML — Google's GIS library renders the button and calls your callback with a fresh `id_token` whenever the user signs in.
+
+```html
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+
+<div id="g_id_onload"
+     data-client_id="YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+     data-context="signin"
+     data-callback="onGoogleCredential"
+     data-use_fedcm_for_prompt="true"></div>
+<div class="g_id_signin" data-type="standard" data-size="large"></div>
+
+<script>
+  async function onGoogleCredential(response) {
+    const r = await fetch('/auth/google', {
+      method: 'POST',
+      credentials: 'include',                  // accept the Set-Cookie response
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id_token: response.credential }),
+    });
+    if (r.ok) location.href = '/';             // logged in — backend cookie is set
+    else      alert('Sign-in failed');
+  }
+</script>
+```
+
+That's the entire frontend surface. `response.credential` is the Google `id_token` (a JWT). It expires in ~1 h, but you only use it once — your backend converts it into a long-lived session cookie immediately.
+
+For native apps use [Credential Manager (Android)](https://developer.android.com/identity/sign-in/credential-manager-siwg) or the [Google Sign-In SDK (iOS)](https://developers.google.com/identity/sign-in/ios) — both deliver an `id_token` you POST to the same endpoint.
+
+### 3. Wire up the backend
+
+Enable the feature:
+
+```toml
+[dependencies]
+auth_rust = { git = "https://github.com/zygmunt-pawel/rust_auth", features = ["google"] }
+```
+
+Construct the verifier once at startup; it owns the JWKS cache:
 
 ```rust
 use std::sync::Arc;
-use auth_rust::core::{AuthConfig, IdentityProvider};
 use auth_rust::providers::google::GoogleIdTokenVerifier;
+
+let google = Arc::new(GoogleIdTokenVerifier::new(
+    std::env::var("GOOGLE_CLIENT_ID")?,        // exactly the Client ID from step 1
+));
+```
+
+Add one handler. The pattern mirrors the magic-link `verify` handler in `examples/axum.rs` — same cookie helper, same `AuthError` mapping:
+
+```rust
+use std::net::IpAddr;
+use std::sync::Arc;
+use auth_rust::core::{AuthConfig, AuthError, IdentityProvider, SessionEventSink};
 use auth_rust::store::{AutoSignupResolver, complete_identity_login};
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{Json, extract::State, http::{StatusCode, header::SET_COOKIE}, response::IntoResponse};
 use axum_client_ip::ClientIp;
 use serde::Deserialize;
 
@@ -287,32 +363,58 @@ struct AppState {
     pool: sqlx::PgPool,
     cfg: AuthConfig,
     google: Arc<dyn IdentityProvider>,
-    sink: Arc<dyn auth_rust::core::SessionEventSink>,
+    sink: Arc<dyn SessionEventSink>,
 }
 
 #[derive(Deserialize)]
-struct GoogleLogin { id_token: String }
+struct GoogleBody { id_token: String }
 
 async fn google_login(
     State(s): State<Arc<AppState>>,
     ClientIp(ip): ClientIp,
-    Json(body): Json<GoogleLogin>,
+    user_agent: Option<axum::TypedHeader<axum::headers::UserAgent>>,
+    Json(body): Json<GoogleBody>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let (token, _user_id) = complete_identity_login(
-        &s.pool, &*s.google, &body.id_token,
-        ip, /* user_agent */ None,
-        &AutoSignupResolver, &s.cfg, &*s.sink,
+    let ua = user_agent.as_ref().map(|h| h.as_str());
+
+    let (session_token, _user_id) = complete_identity_login(
+        &s.pool,
+        &*s.google,
+        &body.id_token,
+        ip,
+        ua,
+        &AutoSignupResolver,
+        &s.cfg,
+        &*s.sink,
     )
     .await
-    .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    .map_err(|e| match e {
+        AuthError::Unauthorized => StatusCode::UNAUTHORIZED,
+        _                       => StatusCode::INTERNAL_SERVER_ERROR,
+    })?;
 
-    let cookie = auth_rust::core::session_cookie_header_value(&token, &s.cfg);
-    Ok(([(axum::http::header::SET_COOKIE, cookie)], StatusCode::NO_CONTENT))
+    let cookie = auth_rust::core::session_cookie_header_value(&session_token, &s.cfg);
+    Ok(([(SET_COOKIE, cookie)], StatusCode::NO_CONTENT))
 }
 
-// At startup:
-let google = Arc::new(GoogleIdTokenVerifier::new(std::env::var("GOOGLE_CLIENT_ID")?));
+// router:  .route("/auth/google", post(google_login))
 ```
+
+Subsequent requests carry the `__Host-session` cookie automatically — authenticate them with `store::authenticate_session` exactly the same way as for magic-link sessions. There is no separate "Google session" type.
+
+### 4. Test it locally
+
+- Add `http://localhost:3000` (or whatever port) to **Authorized JavaScript origins** in the Console — without it Google blocks the popup with `idpiframe_initialization_failed`.
+- The `__Host-` cookie prefix requires `Secure` + `Path=/` + no `Domain`, which means the browser **only accepts it over HTTPS**. For pure HTTP localhost dev set `.same_site(SameSite::Lax)` and use the magic-link flow side-by-side, OR run the dev server behind `mkcert` / `caddy`.
+- The manual smoke test is wired up — grab a fresh `id_token` (e.g. paste one captured from the GIS callback in DevTools) and run:
+
+  ```bash
+  GOOGLE_CLIENT_ID=...apps.googleusercontent.com \
+  GOOGLE_TEST_ID_TOKEN=eyJhbGciOi... \
+    cargo test --features google --test google_real_token -- --ignored --nocapture
+  ```
+
+  It exercises the production code path end-to-end against real Google JWKS — useful one-off sanity check before tagging a release.
 
 ### Account linking
 
