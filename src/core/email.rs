@@ -1,4 +1,5 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(transparent)]
 pub struct Email(String);
 
 #[derive(Debug, PartialEq, Eq)]

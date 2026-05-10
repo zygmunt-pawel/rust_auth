@@ -24,7 +24,7 @@ use sqlx::PgPool;
 use auth_rust::core::cookie::{session_cookie_clear_header_value, session_cookie_header_value};
 use auth_rust::core::{
     AuthConfig, AuthError, AuthenticatedUser, DisposableBlocklist, Email, MagicLinkToken, Mailer,
-    MailerError, SameSite, SessionEvent, SessionEventSink, VerifyCode, VerifyInput,
+    MailerError, SameSite, SessionEvent, SessionEventSink, UserId, VerifyCode, VerifyInput,
 };
 use auth_rust::store::{
     AutoSignupResolver, authenticate_session, delete_session, issue_magic_link, lookup_user_by_id,
@@ -183,8 +183,8 @@ async fn logout_handler(State(state): State<AppState>, headers: HeaderMap) -> Re
 
 #[derive(Serialize)]
 struct MeResponse {
-    id: i64,
-    email: String,
+    id: UserId,
+    email: Email,
 }
 
 async fn me_handler(
@@ -195,8 +195,8 @@ async fn me_handler(
         .await?
         .ok_or(AuthError::Unauthorized)?;
     Ok(Json(MeResponse {
-        id: u.id.0,
-        email: u.email.as_str().to_owned(),
+        id: u.id,
+        email: u.email,
     }))
 }
 

@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::core::email::Email;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct UserId(pub i64);
 
 impl From<i64> for UserId {
@@ -13,6 +14,7 @@ impl From<i64> for UserId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct UserPublicId(pub Uuid);
 
 impl From<Uuid> for UserPublicId {
@@ -22,6 +24,7 @@ impl From<Uuid> for UserPublicId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SessionId(pub i64);
 
 impl From<i64> for SessionId {
