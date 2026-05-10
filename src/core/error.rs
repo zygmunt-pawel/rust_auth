@@ -10,6 +10,8 @@ pub enum AuthError {
     TokenReused,
     #[error("unauthorized")]
     Unauthorized,
+    #[error("account suspended")]
+    AccountSuspended,
     #[error("email locked")]
     EmailLocked,
     #[error("rate limited")]
@@ -27,6 +29,7 @@ impl AuthError {
             | Self::TokenExpired
             | Self::TokenReused
             | Self::Unauthorized
+            | Self::AccountSuspended
             | Self::EmailLocked => 401,
             Self::RateLimited => 429,
             Self::MailerFailed | Self::Internal(_) => 500,
@@ -94,6 +97,7 @@ mod tests {
         assert_eq!(AuthError::TokenExpired.http_status(), 401);
         assert_eq!(AuthError::TokenReused.http_status(), 401);
         assert_eq!(AuthError::Unauthorized.http_status(), 401);
+        assert_eq!(AuthError::AccountSuspended.http_status(), 401);
         assert_eq!(AuthError::EmailLocked.http_status(), 401);
         assert_eq!(AuthError::RateLimited.http_status(), 429);
         assert_eq!(AuthError::MailerFailed.http_status(), 500);

@@ -393,10 +393,11 @@ The library emits `tracing` spans + events on every public operation. Plug in an
 | `warn!` | `outcome="mailer_failed"` | mailer rejected send |
 | `warn!` | `outcome="email_cap_hit"\|"ip_cap_hit"` | issue rate-limit tripped, email/IP block inserted |
 | `warn!` | `outcome="ip_permanent_block"` | repeat-offender IP escalated to permanent block |
+| `warn!` | `outcome="user_suspended"` | live session token presented by a suspended account (returns `AuthError::AccountSuspended`) |
 | `debug!` | `outcome="email_blocked"\|"ip_blocked"` | already-active block silent-drops the request |
 | `debug!` | `outcome="format_invalid"\|"policy_denied"` | other silent drops in `issue_magic_link` |
 | `debug!` | `outcome="invalid_token"\|"wrong_code"\|"no_live_row"\|"lost_consume_race"` | normal verify rejections |
-| `debug!` | `outcome="no_cookie"\|"lookup_miss"` | normal session lookup misses |
+| `debug!` | `outcome="no_cookie"\|"not_found"\|"expired"\|"user_inactive"` | normal session lookup misses |
 
 **PII policy:** by default the `email` field contains only the domain (e.g. `gmail.com`) — full addresses don't reach Loki/Tempo. Pass `.log_full_email(true)` to the builder to log the complete address (useful for support debugging; remember the retention implications). Operator searching for a specific user can also use `user_id` (post-verify) or query the `users` table directly. Audit-grade events with full identifiers go through `SessionEventSink` (your audit log / SIEM), separate from observability stack. IP addresses are logged as standard for security investigations (GDPR "legitimate interest").
 

@@ -65,6 +65,70 @@ async fn authenticate_with_expired_session_returns_unauthorized(pool: sqlx::PgPo
 }
 
 #[sqlx::test]
+async fn authenticate_with_suspended_user_returns_account_suspended(pool: sqlx::PgPool) {
+    let (cookie, user_id) = login_and_get_cookie(&pool).await;
+    sqlx::query("UPDATE users SET status = 'suspended' WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let cfg = test_config();
+    let sink = CapturingSink::new();
+    let r = auth_rust::store::authenticate_session(&pool, Some(&cookie), &cfg, &*sink).await;
+    assert!(
+        matches!(r, Err(auth_rust::core::AuthError::AccountSuspended)),
+        "suspended user with valid session must be distinguishable for the frontend, got {r:?}"
+    );
+}
+
+#[sqlx::test]
+async fn authenticate_with_inactive_user_returns_unauthorized(pool: sqlx::PgPool) {
+    let (cookie, user_id) = login_and_get_cookie(&pool).await;
+    sqlx::query("UPDATE users SET status = 'inactive' WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let cfg = test_config();
+    let sink = CapturingSink::new();
+    let r = auth_rust::store::authenticate_session(&pool, Some(&cookie), &cfg, &*sink).await;
+    assert!(
+        matches!(r, Err(auth_rust::core::AuthError::Unauthorized)),
+        "inactive user must look like generic unauthorized to the frontend, got {r:?}"
+    );
+}
+
+#[sqlx::test]
+async fn authenticate_with_suspended_but_expired_session_does_not_leak_suspension(
+    pool: sqlx::PgPool,
+) {
+    let (cookie, user_id) = login_and_get_cookie(&pool).await;
+    sqlx::query("UPDATE users SET status = 'suspended' WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE sessions
+            SET created_at = NOW() - INTERVAL '2 days',
+                last_seen_at = NOW() - INTERVAL '2 days',
+                expires_at = NOW() - INTERVAL '1 second'
+            WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cfg = test_config();
+    let sink = CapturingSink::new();
+    let r = auth_rust::store::authenticate_session(&pool, Some(&cookie), &cfg, &*sink).await;
+    assert!(
+        matches!(r, Err(auth_rust::core::AuthError::Unauthorized)),
+        "stale cookie must not reveal account status, got {r:?}"
+    );
+}
+
+#[sqlx::test]
 async fn authenticate_within_refresh_window_refreshes_in_place(pool: sqlx::PgPool) {
     let (cookie, _user_id) = login_and_get_cookie(&pool).await;
     sqlx::query("UPDATE sessions SET expires_at = NOW() + INTERVAL '12 hours'")

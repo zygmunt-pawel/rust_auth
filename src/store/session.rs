@@ -72,43 +72,73 @@ pub async fn authenticate_session(
     };
     let token_hash = hmac_sha256_hex(&cfg.token_pepper, plaintext);
 
-    let row: Option<(
-        i64,
-        i64,
-        uuid::Uuid,
-        String,
-        bool,
-        chrono::DateTime<chrono::Utc>,
-    )> = sqlx::query_as(
-        "SELECT s.id, u.id, u.public_id, u.email,
-                s.expires_at < NOW() + $2 AS needs_refresh,
-                s.absolute_expires_at
+    #[derive(sqlx::FromRow)]
+    struct SessionRow {
+        session_id: i64,
+        user_id: i64,
+        user_public_id: uuid::Uuid,
+        email: String,
+        sliding_expired: bool,
+        absolute_expired: bool,
+        status: String,
+        needs_refresh: bool,
+    }
+
+    let row: Option<SessionRow> = sqlx::query_as(
+        "SELECT s.id AS session_id, u.id AS user_id, u.public_id AS user_public_id, u.email,
+                s.expires_at <= NOW() AS sliding_expired,
+                s.absolute_expires_at <= NOW() AS absolute_expired,
+                u.status,
+                s.expires_at < NOW() + $2 AS needs_refresh
          FROM sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.session_token_hash = $1
-           AND s.expires_at > NOW()
-           AND s.absolute_expires_at > NOW()
-           AND u.status = 'active'",
+         WHERE s.session_token_hash = $1",
     )
     .bind(&token_hash)
     .bind(to_interval(cfg.session_refresh_threshold))
     .fetch_optional(pool)
     .await?;
 
-    let (session_id, user_id, user_public_id, email, needs_refresh, _absolute_expires_at) =
-        match row {
-            Some(r) => r,
-            None => {
-                tracing::Span::current().record("outcome", "lookup_miss");
-                tracing::debug!(
-                    outcome = "lookup_miss",
-                    "session token not found / expired / inactive user"
-                );
-                return Err(AuthError::Unauthorized);
-            }
-        };
+    let row = match row {
+        Some(r) => r,
+        None => {
+            tracing::Span::current().record("outcome", "not_found");
+            tracing::debug!(outcome = "not_found", "session token not found");
+            return Err(AuthError::Unauthorized);
+        }
+    };
 
-    tracing::Span::current().record("user_id", user_id);
-    tracing::Span::current().record("session_id", session_id);
+    tracing::Span::current().record("user_id", row.user_id);
+    tracing::Span::current().record("session_id", row.session_id);
+
+    // Order matters: an expired cookie must NOT reveal the account status.
+    if row.sliding_expired || row.absolute_expired {
+        tracing::Span::current().record("outcome", "expired");
+        tracing::debug!(outcome = "expired", "session expired");
+        return Err(AuthError::Unauthorized);
+    }
+
+    match row.status.as_str() {
+        "active" => {}
+        "suspended" => {
+            tracing::Span::current().record("outcome", "user_suspended");
+            tracing::warn!(outcome = "user_suspended", "session for suspended account");
+            return Err(AuthError::AccountSuspended);
+        }
+        other => {
+            tracing::Span::current().record("outcome", "user_inactive");
+            tracing::debug!(outcome = "user_inactive", status = other, "user not active");
+            return Err(AuthError::Unauthorized);
+        }
+    }
+
+    let SessionRow {
+        session_id,
+        user_id,
+        user_public_id,
+        email,
+        needs_refresh,
+        ..
+    } = row;
 
     let user = AuthenticatedUser {
         id: UserId(user_id),

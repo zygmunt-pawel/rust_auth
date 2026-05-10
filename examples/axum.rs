@@ -85,6 +85,11 @@ impl From<AuthError> for ApiError {
 }
 
 // ---------- middleware ----------
+#[derive(Serialize)]
+struct AuthErrorBody {
+    code: &'static str,
+}
+
 async fn require_session(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let cookie_header = req.headers().get(COOKIE).and_then(|v| v.to_str().ok());
     match authenticate_session(&state.pool, cookie_header, &state.cfg, &*state.sink).await {
@@ -96,8 +101,13 @@ async fn require_session(State(state): State<AppState>, mut req: Request, next: 
             }
             resp
         }
-        Err(_) => {
-            let mut resp = StatusCode::UNAUTHORIZED.into_response();
+        Err(e) => {
+            let code = match e {
+                AuthError::AccountSuspended => "account_suspended",
+                _ => "unauthorized",
+            };
+            let mut resp =
+                (StatusCode::UNAUTHORIZED, Json(AuthErrorBody { code })).into_response();
             resp.headers_mut().insert(
                 SET_COOKIE,
                 session_cookie_clear_header_value(&state.cfg)
