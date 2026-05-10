@@ -40,8 +40,9 @@ That's the whole flow. ~50 lines of glue wires it into axum/actix/anything — s
 - ✅ Audit-log hook (`SessionEventSink`)
 - ✅ Cleanup helper for old rows (`store::cleanup_expired`)
 - ✅ Built-in `tracing` spans + structured events (logs/traces correlate out-of-box with [`rust_telemetry`](https://github.com/zygmunt-pawel/rust_telemetry))
+- ✅ Sign in with Google — id_token verification with cached JWKS, auto-link to magic-link accounts on matching email (`features = ["google"]`)
 
-**Not included** (out of scope by design): passwords, OAuth/2FA, JWT, HTTP routing, mailer queue, CAPTCHA. The library deliberately doesn't read environment variables — you pass strings in.
+**Not included** (out of scope by design): passwords, JWT for sessions, HTTP routing, mailer queue, CAPTCHA. The library deliberately doesn't read environment variables — you pass strings in.
 
 ---
 
@@ -254,6 +255,88 @@ impl SessionEventSink for DatadogSink {
 ```
 
 Default `NoOpSink` — no events emitted.
+
+---
+
+## Sign in with Google
+
+Optional second sign-in path next to magic-link, behind the `google` Cargo feature. The library validates Google-issued `id_token` JWTs locally (signature against cached JWKS, `iss` / `aud` / `exp` / `email_verified`) and mints a session — same `__Host-` cookie, same Postgres `sessions` row, same `SessionEventSink` events. No `client_secret`, no token-endpoint round-trip — the frontend SDK already delivered the `id_token`.
+
+### Requirements
+
+- OAuth 2.0 Client ID in [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (type: **Web application** for browser, the platform-specific equivalent for mobile).
+- Frontend SDK that delivers an `id_token` to your backend:
+  - Web: [Google Identity Services (GIS)](https://developers.google.com/identity/gsi/web/guides/overview) — the "Sign in with Google" button or One Tap. Enable FedCM (`use_fedcm_for_prompt: true`) for new apps.
+  - Android: [Credential Manager](https://developer.android.com/identity/sign-in/credential-manager-siwg).
+  - iOS: [Google Sign-In SDK](https://developers.google.com/identity/sign-in/ios).
+- Scope `openid email profile` (the `openid` scope is what makes Google return an `id_token` at all).
+- Enable the feature: `auth_rust = { …, features = ["google"] }`.
+
+### Wire it up (axum)
+
+```rust
+use std::sync::Arc;
+use auth_rust::core::{AuthConfig, IdentityProvider};
+use auth_rust::providers::google::GoogleIdTokenVerifier;
+use auth_rust::store::{AutoSignupResolver, complete_identity_login};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum_client_ip::ClientIp;
+use serde::Deserialize;
+
+struct AppState {
+    pool: sqlx::PgPool,
+    cfg: AuthConfig,
+    google: Arc<dyn IdentityProvider>,
+    sink: Arc<dyn auth_rust::core::SessionEventSink>,
+}
+
+#[derive(Deserialize)]
+struct GoogleLogin { id_token: String }
+
+async fn google_login(
+    State(s): State<Arc<AppState>>,
+    ClientIp(ip): ClientIp,
+    Json(body): Json<GoogleLogin>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let (token, _user_id) = complete_identity_login(
+        &s.pool, &*s.google, &body.id_token,
+        ip, /* user_agent */ None,
+        &AutoSignupResolver, &s.cfg, &*s.sink,
+    )
+    .await
+    .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    let cookie = auth_rust::core::session_cookie_header_value(&token, &s.cfg);
+    Ok(([(axum::http::header::SET_COOKIE, cookie)], StatusCode::NO_CONTENT))
+}
+
+// At startup:
+let google = Arc::new(GoogleIdTokenVerifier::new(std::env::var("GOOGLE_CLIENT_ID")?));
+```
+
+### Account linking
+
+- **Same email on Google and a previous magic-link sign-in → one account.** The resolver matches by email; the new identity row is attached to the existing user. `users` row count stays at 1.
+- **Different emails → two distinct accounts.** Intentional. There is no "merge" UI in v0.2; if a user wants their Google account associated with a different local email, they sign up separately.
+
+The stable identity key is `(provider, subject)` where `subject` is Google's `sub` claim — opaque, never reused, never changes for an account. Email is mutable on Google's side and stored only as `email_at_link` for forensics, never used for matching after the initial link.
+
+### Security checks enforced by `GoogleIdTokenVerifier`
+
+- Signature verified against Google's JWKS (`https://www.googleapis.com/oauth2/v3/certs`), cached in-memory with TTL from the `Cache-Control: max-age` response header, refreshed on unknown `kid`.
+- Algorithm whitelisted to **RS256** before any crypto operation — `alg=none` and RS↔HS256 confusion are rejected at header parse.
+- `iss ∈ {accounts.google.com, https://accounts.google.com}`.
+- `aud == audience` (your client_id) — without this, any other Google-integrated app could replay its `id_token` against you.
+- `exp` checked with 30 s leeway.
+- `email_verified == true` — Google sets `false` for accounts where it does not control the mailbox; never trusted for sign-in.
+- DoS-cooldown on JWKS refresh (30 s) + concurrent-fetch deduplication, so a flood of unknown-`kid` tokens cannot amplify into sustained GETs against Google's endpoint.
+
+### Out of scope (v0.2)
+
+- Authorization Code flow, `client_secret`, token-endpoint exchange. The frontend SDK or One Tap already validates the `id_token` flow end-to-end; backend code-exchange is only needed when you want a `refresh_token` to call Google APIs on the user's behalf — not for sign-in.
+- `refresh_token` (Google's). The backend never speaks to Google's token endpoint.
+- Manual account linking endpoint (`POST /auth/link-google`), account merge, account unlink.
+- Apple, GitHub, Microsoft, other providers. The `IdentityProvider` trait is provider-agnostic — these are additive.
 
 ---
 
