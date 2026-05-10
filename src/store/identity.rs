@@ -16,6 +16,7 @@ use crate::core::{
 };
 use crate::store::session::create_session;
 
+#[allow(clippy::too_many_arguments)] // public entry point — reshaping into a struct adds noise without value
 #[tracing::instrument(
     name = "auth.identity.login",
     skip_all,
