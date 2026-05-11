@@ -673,11 +673,19 @@ All auth fails. No fallback, no cache. Use a managed DB / HA setup.
 
 ## Migration namespace
 
-The library ships **one** SQL migration: `20260501000000_auth_init.sql`. Timestamp prefix avoids version-id collisions with consumer migrations sharing `_sqlx_migrations`. Recommended pattern:
+The library ships **one** SQL migration: `20260501000000_auth_init.sql`. Timestamp prefix avoids version-id collisions with consumer migrations sharing `_sqlx_migrations`. `migrator()` returns an owned `sqlx::migrate::Migrator` per call, so you can configure it inline before running:
 
 ```rust
 auth_rust::store::migrator().run(&pool).await?;   // run library migrations first
 my_app_migrator.run(&pool).await?;                 // then yours
+```
+
+If consumer migrations sit "before" the auth migration in timestamp order (legacy setups), opt into ignore-missing:
+
+```rust
+let mut auth_mig = auth_rust::store::migrator();
+auth_mig.set_ignore_missing(true);
+auth_mig.run(&pool).await?;
 ```
 
 ---
