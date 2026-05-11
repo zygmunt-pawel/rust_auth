@@ -2,7 +2,7 @@
 name = "auth_rust"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95.0"
 description = "Reusable passwordless auth library: magic-link + 6-digit code with sessions on Postgres"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/zygmunt-pawel/rust_auth"
