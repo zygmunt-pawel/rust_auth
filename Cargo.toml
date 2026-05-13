@@ -52,4 +52,4 @@ wiremock = "=0.6.5"
 rsa = { version = "=0.9.6", features = ["sha2"] }
 # rsa 0.9.6 needs an RngCore from rand_core 0.6.x; the main `rand` 0.9 in
 # regular deps is incompatible. Aliased dev-only dep at 0.8.5 to bridge.
-rand08 = { package = "rand", version = "=0.8.5" }
+rand08 = { package = "rand", version = "=0.8.6" }
