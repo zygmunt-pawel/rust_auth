@@ -16,8 +16,9 @@ async fn issue_and_get_code(
     mailer.last_for(email).unwrap().1
 }
 
-#[sqlx::test]
-async fn verify_with_correct_code_creates_session(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verify_with_correct_code_creates_session() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let mailer = CapturingMailer::new();
     let sink = CapturingSink::new();
@@ -40,8 +41,9 @@ async fn verify_with_correct_code_creates_session(pool: sqlx::PgPool) {
     assert_eq!(token.as_str().len(), 43);
 }
 
-#[sqlx::test]
-async fn verify_with_wrong_code_increments_attempts(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verify_with_wrong_code_increments_attempts() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let mailer = CapturingMailer::new();
     let sink = CapturingSink::new();
@@ -71,8 +73,9 @@ async fn verify_with_wrong_code_increments_attempts(pool: sqlx::PgPool) {
     assert_eq!(attempts, 1);
 }
 
-#[sqlx::test]
-async fn five_wrong_attempts_invalidates_row(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn five_wrong_attempts_invalidates_row() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let mailer = CapturingMailer::new();
     let sink = CapturingSink::new();
@@ -111,8 +114,9 @@ async fn five_wrong_attempts_invalidates_row(pool: sqlx::PgPool) {
     assert!(matches!(r, Err(auth_rust::core::AuthError::InvalidToken)));
 }
 
-#[sqlx::test]
-async fn email_with_50_failed_attempts_in_24h_is_locked_when_opt_in(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn email_with_50_failed_attempts_in_24h_is_locked_when_opt_in() {
+    let (_c, pool) = common::pg_pool().await;
     // Account-level lockout is OPT-IN (default cap = 0 disables it). Here we explicitly
     // turn it on (cap = 50) and confirm the lockout fires once exceeded.
     sqlx::query(
@@ -147,8 +151,9 @@ async fn email_with_50_failed_attempts_in_24h_is_locked_when_opt_in(pool: sqlx::
     assert!(matches!(r, Err(auth_rust::core::AuthError::EmailLocked)));
 }
 
-#[sqlx::test]
-async fn lockout_disabled_by_default(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lockout_disabled_by_default() {
+    let (_c, pool) = common::pg_pool().await;
     // With default config (cap = 0), even 100 wrong attempts must NOT return EmailLocked.
     // Each row only allows 5 wrong attempts (code_burned_at) before falling through to
     // InvalidToken — never EmailLocked.

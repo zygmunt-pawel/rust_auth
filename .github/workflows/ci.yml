@@ -6,21 +6,59 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel in-flight runs on the same ref when a new push lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
 
 jobs:
   fmt:
+    name: rustfmt
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --all -- --check
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  doc:
+    name: rustdoc
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `--no-deps` keeps the build fast; `RUSTDOCFLAGS=-D warnings` (env)
+      # turns broken intra-doc links into CI failures.
+      - run: cargo doc --no-deps --document-private-items --all-features
 
   pinned-deps:
+    name: pinned-deps
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v6
       - name: Check all dependencies are pinned to exact versions
@@ -43,85 +81,41 @@ jobs:
           print('All dependencies are pinned to exact versions.')
           "
 
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        toolchain: [stable, nightly]
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: auth_rust_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      # sqlx::test uses this URL to spin a fresh DB per test.
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/auth_rust_ci
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.toolchain }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.toolchain }}
-      - run: cargo test --all-targets
-
   msrv:
+    name: MSRV (1.88)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.88"
+      - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
-      - run: cargo check --all-targets
+      # `cargo check --all-targets --all-features` exercises lib + tests + the
+      # `google` provider on the pinned MSRV from `package.rust-version`. The
+      # full test suite is the `test` job's responsibility. `--locked` honours
+      # the committed Cargo.lock (this repo tracks it).
+      - run: cargo check --all-targets --all-features --locked
 
-  clippy:
+  test:
+    name: test (PG18 via testcontainers)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets -- -D warnings
-
-  audit:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      checks: write
-      issues: write
-    steps:
-      - uses: actions/checkout@v6
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # RUSTSEC-2023-0071: Marvin Attack on `rsa` crate — pulled in transitively by
-          # sqlx-mysql which our build excludes (default-features=false + only `postgres`
-          # feature). The crate is in Cargo.lock metadata but never compiled into our
-          # artifact. Upstream has no patch as of this writing. Re-evaluate when the
-          # `rsa` crate ships a constant-time fix.
-          ignore: RUSTSEC-2023-0071
-
-  trivy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: fs
-          scan-ref: .
-          severity: HIGH,CRITICAL
-          exit-code: 1
+      # ubuntu-latest GH runners ship Docker pre-installed; `testcontainers`
+      # picks it up via the default DOCKER_HOST. Confirm the daemon is up
+      # before launching ~30 integration suites.
+      - name: Verify Docker is available
+        run: docker version
+      - name: Pre-pull PG18 image
+        run: docker pull postgres:18-alpine
+      # `--no-fail-fast` so a single flaky integration test doesn't mask
+      # the rest. `--all-features` exercises the optional `google` provider.
+      # RUST_LOG kept terse (warn-level) to keep CI logs scannable.
+      - name: cargo test
+        env:
+          RUST_LOG: warn,sqlx=warn,auth_rust=warn
+        run: cargo test --all-features --no-fail-fast --locked

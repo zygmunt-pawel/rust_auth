@@ -76,8 +76,9 @@ async fn count(pool: &PgPool, query: &str) -> i64 {
 
 // ─────────────────────────── test cases ────────────────────────────
 
-#[sqlx::test]
-async fn brand_new_user_creates_user_identity_and_session(pool: PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn brand_new_user_creates_user_identity_and_session() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let sink = CapturingSink::new();
     let provider = StubProvider::ok(google_identity("sub-google-1", "alice@example.com"));
@@ -123,8 +124,9 @@ async fn brand_new_user_creates_user_identity_and_session(pool: PgPool) {
     assert!(matches!(events[1], SessionEvent::Created { .. }));
 }
 
-#[sqlx::test]
-async fn magic_link_user_then_google_same_email_links(pool: PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn magic_link_user_then_google_same_email_links() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let mailer = CapturingMailer::new();
     let sink = CapturingSink::new();
@@ -188,8 +190,9 @@ async fn magic_link_user_then_google_same_email_links(pool: PgPool) {
     assert!(matches!(events[1], SessionEvent::Created { .. }));
 }
 
-#[sqlx::test]
-async fn second_google_login_reuses_identity(pool: PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn second_google_login_reuses_identity() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let sink = CapturingSink::new();
     let provider = StubProvider::ok(google_identity("sub-google-3", "bob@example.com"));
@@ -238,8 +241,9 @@ async fn second_google_login_reuses_identity(pool: PgPool) {
     assert!(matches!(events[0], SessionEvent::Created { .. }));
 }
 
-#[sqlx::test]
-async fn different_email_creates_second_user(pool: PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn different_email_creates_second_user() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let sink = CapturingSink::new();
 
@@ -279,8 +283,9 @@ async fn different_email_creates_second_user(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn email_not_verified_returns_unauthorized(pool: PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn email_not_verified_returns_unauthorized() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let sink = CapturingSink::new();
     let provider = StubProvider::err("google", IdentityError::EmailNotVerified);
@@ -308,8 +313,9 @@ async fn email_not_verified_returns_unauthorized(pool: PgPool) {
     assert_eq!(sink.events.lock().unwrap().len(), 0);
 }
 
-#[sqlx::test]
-async fn invalid_token_returns_unauthorized(pool: PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_token_returns_unauthorized() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let sink = CapturingSink::new();
     let provider = StubProvider::err("google", IdentityError::Invalid("bad signature".into()));
@@ -336,8 +342,9 @@ async fn invalid_token_returns_unauthorized(pool: PgPool) {
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM sessions").await, 0);
 }
 
-#[sqlx::test]
-async fn two_providers_same_email_share_user(pool: PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_providers_same_email_share_user() {
+    let (_c, pool) = common::pg_pool().await;
     // Google then Apple with the same email — both identities must point to
     // the same user (resolver auto-links by email each time).
     let cfg = test_config();

@@ -4,8 +4,9 @@ use auth_rust::core::{Email, VerifyCode, VerifyInput};
 use auth_rust::store::AutoSignupResolver;
 use common::{CapturingMailer, CapturingSink, loopback_ip, test_config};
 
-#[sqlx::test]
-async fn cleanup_with_no_old_rows_returns_zeros(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cleanup_with_no_old_rows_returns_zeros() {
+    let (_c, pool) = common::pg_pool().await;
     let report = auth_rust::store::cleanup_expired(&pool).await.unwrap();
     assert_eq!(report.magic_links_deleted, 0);
     assert_eq!(report.sessions_deleted, 0);
@@ -13,8 +14,9 @@ async fn cleanup_with_no_old_rows_returns_zeros(pool: sqlx::PgPool) {
     assert_eq!(report.total(), 0);
 }
 
-#[sqlx::test]
-async fn cleanup_removes_old_magic_links_keeps_fresh(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cleanup_removes_old_magic_links_keeps_fresh() {
+    let (_c, pool) = common::pg_pool().await;
     // 10 fresh rows (different emails so per-email throttle doesn't kick in).
     let cfg = test_config();
     let mailer = CapturingMailer::new();
@@ -55,8 +57,9 @@ async fn cleanup_removes_old_magic_links_keeps_fresh(pool: sqlx::PgPool) {
     assert_eq!(remaining, 3, "3 fresh rows survive");
 }
 
-#[sqlx::test]
-async fn cleanup_removes_dead_sessions_keeps_live(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cleanup_removes_dead_sessions_keeps_live() {
+    let (_c, pool) = common::pg_pool().await;
     // Create a live session via the full flow.
     let cfg = test_config();
     let mailer = CapturingMailer::new();
@@ -121,8 +124,9 @@ async fn cleanup_removes_dead_sessions_keeps_live(pool: sqlx::PgPool) {
     assert_eq!(after, 1, "live session survives");
 }
 
-#[sqlx::test]
-async fn cleanup_removes_old_verify_attempts(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cleanup_removes_old_verify_attempts() {
+    let (_c, pool) = common::pg_pool().await;
     // Insert 5 old + 3 fresh attempts.
     sqlx::query(
         "INSERT INTO auth_verify_attempts (ip, attempted_at)

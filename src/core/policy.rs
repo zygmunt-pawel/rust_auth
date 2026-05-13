@@ -22,7 +22,7 @@ const BUNDLED_LIST: &str = include_str!("../../assets/disposable_domains.txt");
 /// Blocks email domains known to be disposable / temporary.
 ///
 /// Build with [`with_default_list`] (bundled snapshot) or [`empty`] (Your Own Custom Set).
-/// Add more with [`add`] / [`add_iter`]. Carve exceptions with [`allow`].
+/// Add more with [`add`] / [`add_iter`]. Carve exceptions with [`unblock`].
 ///
 /// ```ignore
 /// let policy = DisposableBlocklist::with_default_list()

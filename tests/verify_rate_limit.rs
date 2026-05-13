@@ -4,8 +4,9 @@ use auth_rust::core::{MagicLinkToken, VerifyInput};
 use auth_rust::store::AutoSignupResolver;
 use common::{CapturingSink, loopback_ip, test_builder, test_config};
 
-#[sqlx::test]
-async fn over_cap_returns_rate_limited(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn over_cap_returns_rate_limited() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config(); // default cap = 30/min
     let sink = CapturingSink::new();
 
@@ -43,8 +44,9 @@ async fn over_cap_returns_rate_limited(pool: sqlx::PgPool) {
     assert!(matches!(r, Err(auth_rust::core::AuthError::RateLimited)));
 }
 
-#[sqlx::test]
-async fn cap_zero_disables_check(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cap_zero_disables_check() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_builder().verify_per_ip_per_min_cap(0).build().unwrap();
     let sink = CapturingSink::new();
 
@@ -65,8 +67,9 @@ async fn cap_zero_disables_check(pool: sqlx::PgPool) {
     }
 }
 
-#[sqlx::test]
-async fn verify_does_not_prune_old_attempts_inline(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verify_does_not_prune_old_attempts_inline() {
+    let (_c, pool) = common::pg_pool().await;
     // Regression guard for the P2 fix: the verify hot path used to run a
     // `DELETE WHERE attempted_at < NOW() - INTERVAL '5 minutes'` on every call,
     // which is now the responsibility of `cleanup_expired`. We seed an older
@@ -107,8 +110,9 @@ async fn verify_does_not_prune_old_attempts_inline(pool: sqlx::PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn different_ips_have_independent_buckets(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn different_ips_have_independent_buckets() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let sink = CapturingSink::new();
     let ip_a = std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1));

@@ -1,7 +1,5 @@
-//! Shared test helpers. Each integration test gets a fresh DB via #[sqlx::test].
-//!
-//! sqlx::test reads `DATABASE_URL` from env, creates a fresh DB per test, runs
-//! `migrations/` automatically, and tears down on success.
+//! Shared test helpers. Each integration test spawns its own Postgres 18-alpine
+//! container via testcontainers and runs `store::migrator()` against it.
 
 #![allow(dead_code)]
 
@@ -13,6 +11,36 @@ use auth_rust::core::{
     AuthConfig, AuthConfigBuilder, Email, MagicLinkToken, Mailer, MailerError, Pepper,
     SessionEvent, SessionEventSink, VerifyCode,
 };
+use sqlx::PgPool;
+use testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner};
+use testcontainers_modules::postgres::Postgres;
+
+/// Spin up a fresh PG18 container and return a connected pool with migrations
+/// applied. Container handle MUST be held by the test (drop = stop container).
+pub async fn pg_pool() -> (ContainerAsync<Postgres>, PgPool) {
+    let (container, pool) = pg_container_no_migrate().await;
+    auth_rust::store::migrator()
+        .run(&pool)
+        .await
+        .expect("migrations apply cleanly");
+    (container, pool)
+}
+
+/// Same as [`pg_pool`] but without running migrations — used by tests that
+/// exercise the migrator itself.
+pub async fn pg_container_no_migrate() -> (ContainerAsync<Postgres>, PgPool) {
+    let container = Postgres::default()
+        .with_tag("18-alpine")
+        .start()
+        .await
+        .expect("docker available");
+    let port = container.get_host_port_ipv4(5432).await.unwrap();
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    let pool = PgPool::connect(&url)
+        .await
+        .expect("connect to PG container");
+    (container, pool)
+}
 
 pub fn test_pepper() -> Pepper {
     Pepper::from_bytes([42u8; 32])

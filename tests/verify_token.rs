@@ -4,8 +4,9 @@ use auth_rust::core::{MagicLinkToken, VerifyInput};
 use auth_rust::store::AutoSignupResolver;
 use common::{CapturingMailer, CapturingSink, loopback_ip, test_config};
 
-#[sqlx::test]
-async fn verify_with_valid_token_creates_session(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verify_with_valid_token_creates_session() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let mailer = CapturingMailer::new();
     let sink = CapturingSink::new();
@@ -48,8 +49,9 @@ async fn verify_with_valid_token_creates_session(pool: sqlx::PgPool) {
     assert!(used_at.is_some(), "magic_links row should be marked used");
 }
 
-#[sqlx::test]
-async fn verify_with_unknown_token_returns_invalid_token(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verify_with_unknown_token_returns_invalid_token() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let sink = CapturingSink::new();
     let resolver = AutoSignupResolver;
@@ -68,8 +70,9 @@ async fn verify_with_unknown_token_returns_invalid_token(pool: sqlx::PgPool) {
     assert!(matches!(r, Err(auth_rust::core::AuthError::InvalidToken)));
 }
 
-#[sqlx::test]
-async fn burning_code_does_not_disable_link(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn burning_code_does_not_disable_link() {
+    let (_c, pool) = common::pg_pool().await;
     // Core DoS mitigation: an attacker who knows only the email can burn the 6-digit
     // code path with 5 wrong attempts (sets code_burned_at), but the magic link from
     // the original mail must still authenticate the legit user.
@@ -130,8 +133,9 @@ async fn burning_code_does_not_disable_link(pool: sqlx::PgPool) {
     assert!(user_id.0 > 0);
 }
 
-#[sqlx::test]
-async fn verify_with_already_used_token_returns_token_reused(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verify_with_already_used_token_returns_token_reused() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let mailer = CapturingMailer::new();
     let sink = CapturingSink::new();

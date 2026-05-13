@@ -14,8 +14,9 @@ impl EmailPolicy for DenyAll {
     }
 }
 
-#[sqlx::test]
-async fn issue_inserts_row_and_calls_mailer_once(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue_inserts_row_and_calls_mailer_once() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let mailer = CapturingMailer::new();
 
@@ -48,8 +49,9 @@ async fn issue_inserts_row_and_calls_mailer_once(pool: sqlx::PgPool) {
     assert_ne!(row.2, code);
 }
 
-#[sqlx::test]
-async fn fifteen_issues_pass_sixteenth_blocks_email(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fifteen_issues_pass_sixteenth_blocks_email() {
+    let (_c, pool) = common::pg_pool().await;
     // Per-email cap is 15 in 30 min. 16th attempt → email block inserted, silent drop.
     // Disable per-IP cap so we can isolate the per-email behaviour (otherwise IP cap
     // fires first since both are 15).
@@ -79,8 +81,9 @@ async fn fifteen_issues_pass_sixteenth_blocks_email(pool: sqlx::PgPool) {
     assert_eq!(blocks, 1, "exactly one active block row");
 }
 
-#[sqlx::test]
-async fn block_does_not_extend_on_repeat_attempts(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn block_does_not_extend_on_repeat_attempts() {
+    let (_c, pool) = common::pg_pool().await;
     // After cap hit, further attempts during the block must NOT insert another block
     // row (= must not extend cooldown).
     let cfg = test_builder().issue_per_ip_cap(0).build().unwrap();
@@ -118,8 +121,9 @@ async fn block_does_not_extend_on_repeat_attempts(pool: sqlx::PgPool) {
     assert_eq!(mailer.count(), 15, "no extra mails sent during block");
 }
 
-#[sqlx::test]
-async fn fifteen_issues_pass_sixteenth_blocks_ip(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fifteen_issues_pass_sixteenth_blocks_ip() {
+    let (_c, pool) = common::pg_pool().await;
     // Per-IP cap mirrors per-email: 15 issues from one IP, 16th blocks the IP.
     // Disable per-email cap so distinct emails from one IP don't trip it first.
     let cfg = test_builder().issue_per_email_cap(0).build().unwrap();
@@ -156,8 +160,9 @@ async fn fifteen_issues_pass_sixteenth_blocks_ip(pool: sqlx::PgPool) {
     assert_eq!(ip_blocks, 1);
 }
 
-#[sqlx::test]
-async fn ip_permanent_block_after_three_blocks_in_24h(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ip_permanent_block_after_three_blocks_in_24h() {
+    let (_c, pool) = common::pg_pool().await;
     // Seed 3 expired blocks for an IP within the last 24h to simulate a repeat
     // offender. The 4th block should escalate to permanent (expires_at = 'infinity').
     let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3));
@@ -189,8 +194,9 @@ async fn ip_permanent_block_after_three_blocks_in_24h(pool: sqlx::PgPool) {
     assert!(is_permanent, "4th block in 24h must escalate to permanent");
 }
 
-#[sqlx::test]
-async fn active_block_silent_drops_with_no_mailer_call(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn active_block_silent_drops_with_no_mailer_call() {
+    let (_c, pool) = common::pg_pool().await;
     // Pre-seed an active email block; subsequent issue must be silent-dropped.
     sqlx::query(
         "INSERT INTO auth_email_blocks (email, expires_at) VALUES ($1, NOW() + INTERVAL '30 minutes')"
@@ -209,8 +215,9 @@ async fn active_block_silent_drops_with_no_mailer_call(pool: sqlx::PgPool) {
     assert_eq!(rows, 0);
 }
 
-#[sqlx::test]
-async fn new_issue_invalidates_previous_link_and_code(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_issue_invalidates_previous_link_and_code() {
+    let (_c, pool) = common::pg_pool().await;
     // "Newest mail wins" — issuing a new magic link must invalidate every previously
     // live row for the same email, both link path AND code path. User-intuition match
     // (Auth0/Supabase pattern).
@@ -284,8 +291,9 @@ async fn new_issue_invalidates_previous_link_and_code(pool: sqlx::PgPool) {
     assert!(r.is_ok(), "new link must authenticate; got {r:?}");
 }
 
-#[sqlx::test]
-async fn email_policy_block_silent_drops(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn email_policy_block_silent_drops() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_builder().policy(Arc::new(DenyAll)).build().unwrap();
     let mailer = CapturingMailer::new();
     auth_rust::store::issue_magic_link(&pool, "u@e.com", loopback_ip(), &cfg, &*mailer)

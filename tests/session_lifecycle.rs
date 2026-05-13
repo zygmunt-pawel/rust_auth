@@ -30,8 +30,9 @@ async fn login_and_get_cookie(pool: &sqlx::PgPool) -> (String, i64) {
     (cookie, user_id.0)
 }
 
-#[sqlx::test]
-async fn authenticate_returns_user_for_live_session(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticate_returns_user_for_live_session() {
+    let (_c, pool) = common::pg_pool().await;
     let (cookie, user_id) = login_and_get_cookie(&pool).await;
     let cfg = test_config();
     let sink = CapturingSink::new();
@@ -46,16 +47,18 @@ async fn authenticate_returns_user_for_live_session(pool: sqlx::PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn authenticate_with_no_cookie_returns_unauthorized(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticate_with_no_cookie_returns_unauthorized() {
+    let (_c, pool) = common::pg_pool().await;
     let cfg = test_config();
     let sink = CapturingSink::new();
     let r = auth_rust::store::authenticate_session(&pool, None, &cfg, &*sink).await;
     assert!(matches!(r, Err(auth_rust::core::AuthError::Unauthorized)));
 }
 
-#[sqlx::test]
-async fn authenticate_with_expired_session_returns_unauthorized(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticate_with_expired_session_returns_unauthorized() {
+    let (_c, pool) = common::pg_pool().await;
     let (cookie, _user_id) = login_and_get_cookie(&pool).await;
     sqlx::query("UPDATE sessions SET created_at = NOW() - INTERVAL '2 days', last_seen_at = NOW() - INTERVAL '2 days', expires_at = NOW() - INTERVAL '1 second'").execute(&pool).await.unwrap();
     let cfg = test_config();
@@ -64,8 +67,9 @@ async fn authenticate_with_expired_session_returns_unauthorized(pool: sqlx::PgPo
     assert!(matches!(r, Err(auth_rust::core::AuthError::Unauthorized)));
 }
 
-#[sqlx::test]
-async fn authenticate_with_suspended_user_returns_account_suspended(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticate_with_suspended_user_returns_account_suspended() {
+    let (_c, pool) = common::pg_pool().await;
     let (cookie, user_id) = login_and_get_cookie(&pool).await;
     sqlx::query("UPDATE users SET status = 'suspended' WHERE id = $1")
         .bind(user_id)
@@ -81,8 +85,9 @@ async fn authenticate_with_suspended_user_returns_account_suspended(pool: sqlx::
     );
 }
 
-#[sqlx::test]
-async fn authenticate_with_inactive_user_returns_unauthorized(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticate_with_inactive_user_returns_unauthorized() {
+    let (_c, pool) = common::pg_pool().await;
     let (cookie, user_id) = login_and_get_cookie(&pool).await;
     sqlx::query("UPDATE users SET status = 'inactive' WHERE id = $1")
         .bind(user_id)
@@ -98,10 +103,9 @@ async fn authenticate_with_inactive_user_returns_unauthorized(pool: sqlx::PgPool
     );
 }
 
-#[sqlx::test]
-async fn authenticate_with_suspended_but_expired_session_does_not_leak_suspension(
-    pool: sqlx::PgPool,
-) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticate_with_suspended_but_expired_session_does_not_leak_suspension() {
+    let (_c, pool) = common::pg_pool().await;
     let (cookie, user_id) = login_and_get_cookie(&pool).await;
     sqlx::query("UPDATE users SET status = 'suspended' WHERE id = $1")
         .bind(user_id)
@@ -128,8 +132,9 @@ async fn authenticate_with_suspended_but_expired_session_does_not_leak_suspensio
     );
 }
 
-#[sqlx::test]
-async fn authenticate_within_refresh_window_refreshes_in_place(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticate_within_refresh_window_refreshes_in_place() {
+    let (_c, pool) = common::pg_pool().await;
     let (cookie, _user_id) = login_and_get_cookie(&pool).await;
     sqlx::query("UPDATE sessions SET expires_at = NOW() + INTERVAL '12 hours'")
         .execute(&pool)
@@ -148,8 +153,9 @@ async fn authenticate_within_refresh_window_refreshes_in_place(pool: sqlx::PgPoo
     assert_eq!(sink.count(), 1, "Refreshed event emitted");
 }
 
-#[sqlx::test]
-async fn delete_session_revokes(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delete_session_revokes() {
+    let (_c, pool) = common::pg_pool().await;
     let (cookie, _) = login_and_get_cookie(&pool).await;
     let cfg = test_config();
     let sink = CapturingSink::new();
@@ -162,8 +168,9 @@ async fn delete_session_revokes(pool: sqlx::PgPool) {
     assert!(matches!(r, Err(auth_rust::core::AuthError::Unauthorized)));
 }
 
-#[sqlx::test]
-async fn rotate_session_replaces_token_preserving_absolute_expiry(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rotate_session_replaces_token_preserving_absolute_expiry() {
+    let (_c, pool) = common::pg_pool().await;
     let (cookie, user_id) = login_and_get_cookie(&pool).await;
     let cfg = test_config();
     let sink = CapturingSink::new();
@@ -182,8 +189,9 @@ async fn rotate_session_replaces_token_preserving_absolute_expiry(pool: sqlx::Pg
     assert_eq!(user.id.0, user_id);
 }
 
-#[sqlx::test]
-async fn lookup_user_by_id_returns_user_after_signup(pool: sqlx::PgPool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lookup_user_by_id_returns_user_after_signup() {
+    let (_c, pool) = common::pg_pool().await;
     let (_, user_id) = login_and_get_cookie(&pool).await;
     let user = auth_rust::store::lookup_user_by_id(&pool, auth_rust::core::UserId(user_id))
         .await

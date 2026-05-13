@@ -189,7 +189,7 @@ impl AuthConfig {
         &self.cookie_name_full
     }
 
-    /// Same as [`cookie_name`] but with a trailing `=` — used by the cookie
+    /// Same as [`Self::cookie_name`] but with a trailing `=` — used by the cookie
     /// extractor to match against `name=` prefixes without a per-call alloc.
     pub(crate) fn cookie_name_with_eq(&self) -> &str {
         &self.cookie_name_with_eq

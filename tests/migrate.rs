@@ -1,5 +1,8 @@
-#[sqlx::test(migrations = false)]
-async fn library_migrator_applies_cleanly(pool: sqlx::PgPool) {
+mod common;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn library_migrator_applies_cleanly() {
+    let (_c, pool) = common::pg_container_no_migrate().await;
     auth_rust::store::migrator()
         .run(&pool)
         .await
