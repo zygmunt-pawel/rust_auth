@@ -66,6 +66,48 @@ async fn cap_zero_disables_check(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test]
+async fn verify_does_not_prune_old_attempts_inline(pool: sqlx::PgPool) {
+    // Regression guard for the P2 fix: the verify hot path used to run a
+    // `DELETE WHERE attempted_at < NOW() - INTERVAL '5 minutes'` on every call,
+    // which is now the responsibility of `cleanup_expired`. We seed an older
+    // attempt and confirm verify leaves it alone.
+    let cfg = test_config();
+    let sink = CapturingSink::new();
+    let ip = loopback_ip();
+
+    sqlx::query(
+        "INSERT INTO auth_verify_attempts (ip, attempted_at)
+         VALUES ($1, NOW() - INTERVAL '10 minutes')",
+    )
+    .bind(ip)
+    .execute(&pool)
+    .await
+    .expect("seed old attempt");
+
+    let token = MagicLinkToken::from_string("bogus-noprune-token-43-chars-pad-pad-pad-foo".into());
+    let _ = auth_rust::store::verify_magic_link_or_code(
+        &pool,
+        VerifyInput::Token(token),
+        ip,
+        None,
+        &AutoSignupResolver,
+        &cfg,
+        &*sink,
+    )
+    .await;
+
+    // Seed survived + a new row was inserted by verify_rate_check_ip.
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM auth_verify_attempts")
+        .fetch_one(&pool)
+        .await
+        .expect("count attempts");
+    assert_eq!(
+        total, 2,
+        "verify must not prune old rows inline; cleanup owns retention"
+    );
+}
+
+#[sqlx::test]
 async fn different_ips_have_independent_buckets(pool: sqlx::PgPool) {
     let cfg = test_config();
     let sink = CapturingSink::new();

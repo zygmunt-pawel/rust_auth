@@ -82,7 +82,11 @@ pub async fn complete_identity_login(
     tracing::Span::current().record("subject", identity.subject.as_str());
 
     // 2. Lookup existing identity by stable (provider, subject) key.
-    let existing: Option<(i64,)> =
+    #[derive(sqlx::FromRow)]
+    struct IdentityRow {
+        user_id: i64,
+    }
+    let existing: Option<IdentityRow> =
         sqlx::query_as("SELECT user_id FROM auth_identities WHERE provider = $1 AND subject = $2")
             .bind(identity.provider.as_str())
             .bind(identity.subject.as_str())
@@ -90,7 +94,7 @@ pub async fn complete_identity_login(
             .await?;
 
     let (user_id, linked) = match existing {
-        Some((uid,)) => {
+        Some(IdentityRow { user_id: uid }) => {
             // 3a. Known identity — bump last_login_at, reuse the user.
             sqlx::query(
                 "UPDATE auth_identities SET last_login_at = NOW()

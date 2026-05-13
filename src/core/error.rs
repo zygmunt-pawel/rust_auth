@@ -18,6 +18,10 @@ pub enum AuthError {
     RateLimited,
     #[error("mailer failed")]
     MailerFailed,
+    /// Database / storage failure. Wraps `sqlx::Error` directly so observability
+    /// keeps the `source()` chain (pool timeout, RowNotFound, Database(..), ...).
+    #[error("storage error")]
+    Storage(#[from] sqlx::Error),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -32,7 +36,7 @@ impl AuthError {
             | Self::AccountSuspended
             | Self::EmailLocked => 401,
             Self::RateLimited => 429,
-            Self::MailerFailed | Self::Internal(_) => 500,
+            Self::MailerFailed | Self::Storage(_) | Self::Internal(_) => 500,
         }
     }
 }
@@ -81,15 +85,10 @@ pub enum ResolverError {
     Internal(String),
 }
 
-impl From<sqlx::Error> for AuthError {
-    fn from(e: sqlx::Error) -> Self {
-        Self::Internal(format!("sqlx: {e}"))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
 
     #[test]
     fn http_status_mapping() {
@@ -102,5 +101,40 @@ mod tests {
         assert_eq!(AuthError::RateLimited.http_status(), 429);
         assert_eq!(AuthError::MailerFailed.http_status(), 500);
         assert_eq!(AuthError::Internal("x".into()).http_status(), 500);
+        // Storage maps to 500 just like Internal — Database/Pool errors are not
+        // client-recoverable.
+        let storage = AuthError::Storage(sqlx::Error::RowNotFound);
+        assert_eq!(storage.http_status(), 500);
+    }
+
+    #[test]
+    fn storage_preserves_source_chain() {
+        // Regression guard for the #[from] sqlx::Error wiring — `source()` must
+        // surface the wrapped sqlx::Error so structured loggers can downcast it
+        // back (e.g. distinguish PoolTimedOut from RowNotFound).
+        let auth_err: AuthError = sqlx::Error::RowNotFound.into();
+        assert!(matches!(
+            auth_err,
+            AuthError::Storage(sqlx::Error::RowNotFound)
+        ));
+        let source = auth_err
+            .source()
+            .expect("AuthError::Storage must expose its source");
+        assert!(
+            source.downcast_ref::<sqlx::Error>().is_some(),
+            "source() must downcast back to sqlx::Error, got: {source:?}"
+        );
+    }
+
+    #[test]
+    fn sqlx_error_converts_via_question_mark() {
+        // Sanity check that the `?` operator still works on sqlx::Error within
+        // a function returning Result<_, AuthError> — the entire codebase relies
+        // on this.
+        fn returns_auth_err() -> Result<(), AuthError> {
+            Err::<(), sqlx::Error>(sqlx::Error::RowNotFound)?;
+            Ok(())
+        }
+        assert!(matches!(returns_auth_err(), Err(AuthError::Storage(_))));
     }
 }

@@ -65,6 +65,12 @@ const FAILED_REFRESH_COOLDOWN: Duration = Duration::from_secs(30);
 /// Fallback when the response has no parseable `Cache-Control: max-age`.
 /// Google sets ~6h in practice; 1h is the conservative default.
 const DEFAULT_JWKS_TTL: Duration = Duration::from_secs(3600);
+/// Hard upper bound on the JWKS HTTP round-trip. Without this, a hung Google
+/// endpoint would hold `refresh_lock` forever and pile up every concurrent
+/// verify(). 5 s is well above Google's p99 (<200 ms) and well below any
+/// realistic user-facing patience.
+const JWKS_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+const JWKS_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Snapshot of the JWKS state — keys plus the moment they were fetched and the
 /// TTL we derived from `Cache-Control: max-age` on the response.
@@ -134,9 +140,14 @@ impl GoogleIdTokenVerifier {
     }
 
     fn build(audience: String, jwks_url: String) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(JWKS_HTTP_TIMEOUT)
+            .connect_timeout(JWKS_CONNECT_TIMEOUT)
+            .build()
+            .expect("reqwest client builder must succeed");
         Self {
             audience,
-            http: reqwest::Client::new(),
+            http,
             jwks_url,
             iss_allowed: GOOGLE_ISS_ALLOWED,
             jwks: tokio::sync::RwLock::new(JwksState::empty()),

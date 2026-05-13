@@ -28,11 +28,12 @@ pub fn extract_session_cookie_value<'a>(
     cfg: &AuthConfig,
 ) -> Option<&'a str> {
     let raw = cookie_header?;
-    // Search for "<name>=" prefix among ;-separated pairs.
-    let target = format!("{}=", cfg.cookie_name());
+    // Search for "<name>=" prefix among ;-separated pairs. The target string
+    // is pre-rendered at config build time — no per-call alloc.
+    let target = cfg.cookie_name_with_eq();
     raw.split(';')
         .map(str::trim)
-        .find_map(|pair| pair.strip_prefix(target.as_str()))
+        .find_map(|pair| pair.strip_prefix(target))
         .filter(|v| !v.is_empty())
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "auth_rust"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Reusable passwordless auth library: magic-link + 6-digit code with sessions on Postgres"

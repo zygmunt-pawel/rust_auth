@@ -1,13 +1,12 @@
 use std::net::IpAddr;
-use std::time::Duration;
 
 use sqlx::PgPool;
-use sqlx::postgres::types::PgInterval;
 use tracing::field;
 
 use crate::core::{AuthConfig, AuthError, Email, MagicLinkToken, Mailer, VerifyCode};
 use crate::store::hash::hmac_sha256_hex;
 use crate::store::pad::{ISSUE_PAD, start_pad};
+use crate::store::to_interval;
 
 #[tracing::instrument(
     name = "auth.issue_magic_link",
@@ -50,8 +49,12 @@ async fn issue_inner(
     cfg: &AuthConfig,
     mailer: &dyn Mailer,
 ) -> Result<(), AuthError> {
-    // Active block check (cheap lookup, both checks short-circuit on first hit).
-    if email_is_blocked(pool, email).await? {
+    // Single round-trip pre-check: combine the two block-list lookups and the
+    // two rolling-window counts into one SELECT. The 4-query version cost
+    // 4× network latency on every issue; planner runs the subqueries together.
+    let gate = preflight_checks(pool, email, ip, cfg).await?;
+
+    if gate.email_blocked {
         tracing::Span::current().record("outcome", "email_blocked");
         tracing::debug!(
             outcome = "email_blocked",
@@ -59,7 +62,7 @@ async fn issue_inner(
         );
         return Ok(());
     }
-    if ip_is_blocked(pool, ip).await? {
+    if gate.ip_blocked {
         tracing::Span::current().record("outcome", "ip_blocked");
         tracing::debug!(outcome = "ip_blocked", "silent drop: ip under active block");
         return Ok(());
@@ -69,7 +72,7 @@ async fn issue_inner(
     // If we hit the cap, insert a block (does NOT extend an existing one) and silent-drop.
     // Block events log email+ip explicitly so abuse triage in Loki/Grafana is trivial:
     // `{outcome="email_cap_hit"} | json | line_format "{{.email}} {{.ip}}"`.
-    if email_cap_exceeded(pool, email, cfg).await? {
+    if cfg.issue_per_email_cap > 0 && gate.email_count >= cfg.issue_per_email_cap as i64 {
         insert_email_block(pool, email, cfg).await?;
         tracing::Span::current().record("outcome", "email_cap_hit");
         tracing::warn!(
@@ -80,7 +83,7 @@ async fn issue_inner(
         );
         return Ok(());
     }
-    if ip_cap_exceeded(pool, ip, cfg).await? {
+    if cfg.issue_per_ip_cap > 0 && gate.ip_count >= cfg.issue_per_ip_cap as i64 {
         insert_ip_block(pool, ip, cfg).await?;
         tracing::Span::current().record("outcome", "ip_cap_hit");
         tracing::warn!(
@@ -150,58 +153,42 @@ async fn issue_inner(
     }
 }
 
-async fn email_is_blocked(pool: &PgPool, email: &Email) -> Result<bool, AuthError> {
-    let blocked: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM auth_email_blocks WHERE email = $1 AND expires_at > NOW())",
-    )
-    .bind(email.as_str())
-    .fetch_one(pool)
-    .await?;
-    Ok(blocked)
+#[derive(sqlx::FromRow)]
+struct PreflightGate {
+    email_blocked: bool,
+    ip_blocked: bool,
+    email_count: i64,
+    ip_count: i64,
 }
 
-async fn ip_is_blocked(pool: &PgPool, ip: IpAddr) -> Result<bool, AuthError> {
-    let blocked: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM auth_ip_blocks WHERE ip = $1 AND expires_at > NOW())",
-    )
-    .bind(ip)
-    .fetch_one(pool)
-    .await?;
-    Ok(blocked)
-}
-
-async fn email_cap_exceeded(
+/// One round-trip preflight for `issue_inner`. Returns:
+/// - active block flags for the email and IP,
+/// - rolling-window mail counts for the email and IP.
+///
+/// Empty counts are returned as 0; the caller decides what cap (if any) applies.
+async fn preflight_checks(
     pool: &PgPool,
     email: &Email,
+    ip: IpAddr,
     cfg: &AuthConfig,
-) -> Result<bool, AuthError> {
-    if cfg.issue_per_email_cap == 0 {
-        return Ok(false);
-    }
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM magic_links
-         WHERE email = $1 AND created_at > NOW() - $2",
+) -> Result<PreflightGate, AuthError> {
+    let gate: PreflightGate = sqlx::query_as(
+        "SELECT
+            EXISTS(SELECT 1 FROM auth_email_blocks
+                   WHERE email = $1 AND expires_at > NOW())          AS email_blocked,
+            EXISTS(SELECT 1 FROM auth_ip_blocks
+                   WHERE ip = $2 AND expires_at > NOW())             AS ip_blocked,
+            (SELECT COUNT(*) FROM magic_links
+              WHERE email = $1 AND created_at > NOW() - $3)::bigint  AS email_count,
+            (SELECT COUNT(*) FROM magic_links
+              WHERE ip = $2 AND created_at > NOW() - $3)::bigint     AS ip_count",
     )
     .bind(email.as_str())
-    .bind(to_interval(cfg.issue_window))
-    .fetch_one(pool)
-    .await?;
-    Ok(count >= cfg.issue_per_email_cap as i64)
-}
-
-async fn ip_cap_exceeded(pool: &PgPool, ip: IpAddr, cfg: &AuthConfig) -> Result<bool, AuthError> {
-    if cfg.issue_per_ip_cap == 0 {
-        return Ok(false);
-    }
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM magic_links
-         WHERE ip = $1 AND created_at > NOW() - $2",
-    )
     .bind(ip)
     .bind(to_interval(cfg.issue_window))
     .fetch_one(pool)
     .await?;
-    Ok(count >= cfg.issue_per_ip_cap as i64)
+    Ok(gate)
 }
 
 async fn insert_email_block(
@@ -256,8 +243,4 @@ async fn insert_ip_block(pool: &PgPool, ip: IpAddr, cfg: &AuthConfig) -> Result<
             .await?;
     }
     Ok(())
-}
-
-fn to_interval(d: Duration) -> PgInterval {
-    PgInterval::try_from(d).expect("duration fits in PgInterval")
 }

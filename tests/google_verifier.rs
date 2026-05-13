@@ -432,3 +432,40 @@ async fn cache_control_max_age_respected() {
         "expired TTL must trigger a fresh GET on the next verify"
     );
 }
+
+#[tokio::test]
+async fn jwks_fetch_times_out_under_slow_endpoint() {
+    // Regression guard for the reqwest timeout on the JWKS client.
+    // The mock delays its response by 30s — without the configured timeout
+    // (~5s) verify would hang well past any reasonable user patience and
+    // would also hold `refresh_lock`, piling up every concurrent verify().
+    //
+    // We tolerate up to 10s here to absorb slow CI; the production timeout
+    // is 5s so anything well under 30s proves the timeout fired.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(jwks_body(KID))
+                .set_delay(std::time::Duration::from_secs(30)),
+        )
+        .mount(&server)
+        .await;
+    let url = format!("{}/jwks", server.uri());
+    let verifier = GoogleIdTokenVerifier::with_jwks_url(AUDIENCE, url);
+    let token = mint_rs256(KID, &standard_claims(AUDIENCE, ISS));
+
+    let started = std::time::Instant::now();
+    let err = verifier.verify(&token).await.unwrap_err();
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "verify hung for {elapsed:?} — reqwest timeout did not fire"
+    );
+    assert!(
+        matches!(err, IdentityError::Transient(_)),
+        "slow JWKS must surface as Transient, got {err:?}"
+    );
+}

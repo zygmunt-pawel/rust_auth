@@ -79,12 +79,9 @@ async fn verify_rate_check_ip(
     .fetch_one(pool)
     .await?;
 
-    let _ = sqlx::query(
-        "DELETE FROM auth_verify_attempts WHERE attempted_at < NOW() - INTERVAL '5 minutes'",
-    )
-    .execute(pool)
-    .await;
-
+    // Old-row pruning belongs to `cleanup_expired`, NOT the hot verify path.
+    // Doing it inline cost a write lock on every verify and swallowed errors
+    // via `let _ = ...`. The cleanup job handles the 5-min retention.
     Ok(count < cfg.verify_per_ip_per_min_cap as i64)
 }
 
@@ -106,7 +103,11 @@ async fn verify_by_token(
         .await?;
 
     // `link_attempts <= $2` enforced via cfg (no magic numbers in SQL — config is SoT).
-    let consumed: Option<(String,)> = sqlx::query_as(
+    #[derive(sqlx::FromRow)]
+    struct ConsumedRow {
+        email: String,
+    }
+    let consumed: Option<ConsumedRow> = sqlx::query_as(
         "UPDATE magic_links SET used_at = NOW()
          WHERE token_hash = $1
            AND used_at IS NULL
@@ -120,7 +121,7 @@ async fn verify_by_token(
     .await?;
 
     let email_str = match consumed {
-        Some((e,)) => e,
+        Some(ConsumedRow { email: e }) => e,
         None => {
             tracing::Span::current().record("outcome", "invalid_token");
             tracing::debug!(
@@ -181,7 +182,8 @@ async fn verify_by_code(
         .await?;
         let failures = total_failures.unwrap_or(0);
         if failures >= cfg.code_failures_per_email_24h_cap as i64 {
-            let _ = hmac_sha256_hex(&cfg.token_pepper, code.as_str()); // dummy HMAC for timing parity
+            // Dummy HMAC for timing parity; black_box prevents compiler elision.
+            std::hint::black_box(hmac_sha256_hex(&cfg.token_pepper, code.as_str()));
             tracing::Span::current().record("outcome", "email_locked");
             tracing::warn!(
                 outcome = "email_locked",
@@ -201,7 +203,13 @@ async fn verify_by_code(
     // lock fires — under concurrent verify_code calls, PG re-evaluates the outer WHERE
     // (not the subselect) when unblocked, so a row burned/consumed by the winner is
     // skipped by the loser instead of being incremented past the cap.
-    let row: Option<(i64, String, i32)> = sqlx::query_as(
+    #[derive(sqlx::FromRow)]
+    struct CodeRow {
+        id: i64,
+        code_hash: String,
+        code_attempts: i32,
+    }
+    let row: Option<CodeRow> = sqlx::query_as(
         "UPDATE magic_links
          SET code_attempts = code_attempts + 1,
              code_burned_at = CASE WHEN code_attempts + 1 >= $2 THEN NOW() ELSE code_burned_at END
@@ -224,9 +232,17 @@ async fn verify_by_code(
     .await?;
 
     let (row_id, stored_hash, attempts_after) = match row {
-        Some(r) => r,
+        Some(CodeRow {
+            id,
+            code_hash,
+            code_attempts,
+        }) => (id, code_hash, code_attempts),
         None => {
-            let _ = crate::store::hash::ct_eq_hex(&provided_hash, &provided_hash); // dummy ct_eq
+            // Dummy ct_eq for timing parity; black_box prevents compiler elision.
+            std::hint::black_box(crate::store::hash::ct_eq_hex(
+                &provided_hash,
+                &provided_hash,
+            ));
             tracing::Span::current().record("outcome", "no_live_row");
             tracing::debug!(outcome = "no_live_row", "no live magic_links row for email");
             return Err(AuthError::InvalidToken);
@@ -238,7 +254,7 @@ async fn verify_by_code(
         tracing::debug!(
             outcome = "wrong_code",
             attempts_after,
-            row_invalidated = attempts_after >= 5,
+            row_invalidated = attempts_after >= cfg.code_attempts_per_row as i32,
             "code mismatch"
         );
         return Err(AuthError::InvalidToken);

@@ -17,3 +17,7 @@ pub use verify::verify_magic_link_or_code;
 pub fn migrator() -> sqlx::migrate::Migrator {
     sqlx::migrate!("./migrations")
 }
+
+pub(crate) fn to_interval(d: std::time::Duration) -> sqlx::postgres::types::PgInterval {
+    sqlx::postgres::types::PgInterval::try_from(d).expect("duration fits in PgInterval")
+}

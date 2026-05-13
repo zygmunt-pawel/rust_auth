@@ -1,8 +1,9 @@
 use std::time::Duration;
 use tokio::time::{Instant, sleep_until};
 
-/// Returned by `start_pad`. Drop or call `.finish()` at the end of an issue/verify path
-/// to ensure the call always takes at least `target` duration.
+/// Returned by `start_pad`. Call `.finish().await` at the end of an issue/verify path
+/// to ensure the call always takes at least `target` duration. Dropping the guard
+/// WITHOUT awaiting `.finish()` skips the pad — sync `Drop` cannot block on a sleep.
 pub(crate) struct PadGuard {
     deadline: Instant,
 }

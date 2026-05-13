@@ -15,12 +15,14 @@ pub(crate) fn hmac_sha256_hex(pepper: &Pepper, plaintext: &str) -> String {
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        write!(s, "{b:02x}").unwrap();
+    const TABLE: &[u8; 16] = b"0123456789abcdef";
+    let mut out = vec![0u8; bytes.len() * 2];
+    for (i, b) in bytes.iter().enumerate() {
+        out[2 * i] = TABLE[(b >> 4) as usize];
+        out[2 * i + 1] = TABLE[(b & 0x0f) as usize];
     }
-    s
+    // SAFETY: TABLE contains only ASCII bytes; output is valid UTF-8.
+    unsafe { String::from_utf8_unchecked(out) }
 }
 
 /// Constant-time equal for two hex strings of equal length. Returns false if lengths differ.
@@ -64,5 +66,27 @@ mod tests {
         assert!(ct_eq_hex("abc123", "abc123"));
         assert!(!ct_eq_hex("abc123", "abc124"));
         assert!(!ct_eq_hex("abc123", "abc12"));
+    }
+
+    #[test]
+    fn hex_lower_matches_format_for_all_bytes() {
+        // Regression guard for the LUT-based hex_lower — must produce byte-for-byte
+        // identical output to the `{:02x}` formatter across the full u8 range.
+        let all_bytes: Vec<u8> = (0u8..=255).collect();
+        let got = hex_lower(&all_bytes);
+        let mut expected = String::with_capacity(all_bytes.len() * 2);
+        use std::fmt::Write as _;
+        for b in &all_bytes {
+            write!(expected, "{b:02x}").unwrap();
+        }
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn hex_lower_handles_empty_and_single() {
+        assert_eq!(hex_lower(&[]), "");
+        assert_eq!(hex_lower(&[0]), "00");
+        assert_eq!(hex_lower(&[0xff]), "ff");
+        assert_eq!(hex_lower(&[0xab, 0xcd]), "abcd");
     }
 }

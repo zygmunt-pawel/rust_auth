@@ -1,8 +1,6 @@
 use std::net::IpAddr;
-use std::time::Duration;
 
 use sqlx::PgPool;
-use sqlx::postgres::types::PgInterval;
 use tracing::field;
 
 use crate::core::cookie::{extract_session_cookie_value, session_cookie_header_value};
@@ -11,6 +9,32 @@ use crate::core::{
     SessionToken, UserId, UserPublicId,
 };
 use crate::store::hash::hmac_sha256_hex;
+use crate::store::to_interval;
+
+#[derive(sqlx::FromRow)]
+struct SessionRow {
+    session_id: i64,
+    user_id: i64,
+    user_public_id: uuid::Uuid,
+    email: String,
+    sliding_expired: bool,
+    absolute_expired: bool,
+    status: String,
+    needs_refresh: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct DeletedSessionRow {
+    id: i64,
+    user_id: i64,
+}
+
+#[derive(sqlx::FromRow)]
+struct RotatedSessionRow {
+    old_id: i64,
+    new_id: i64,
+    user_id: i64,
+}
 
 pub(crate) struct CreatedSession {
     pub session_id: SessionId,
@@ -27,7 +51,7 @@ pub(crate) async fn create_session(
     let token = SessionToken::generate();
     let token_hash = hmac_sha256_hex(&cfg.token_pepper, token.as_str());
 
-    let row: (i64,) = sqlx::query_as(
+    let session_id: i64 = sqlx::query_scalar(
         "INSERT INTO sessions
             (session_token_hash, user_id, expires_at, absolute_expires_at, user_agent, ip)
          VALUES ($1, $2, NOW() + $3, NOW() + $4, $5, $6)
@@ -43,7 +67,7 @@ pub(crate) async fn create_session(
     .await?;
 
     Ok(CreatedSession {
-        session_id: SessionId(row.0),
+        session_id: SessionId(session_id),
         token,
     })
 }
@@ -72,18 +96,6 @@ pub async fn authenticate_session(
         }
     };
     let token_hash = hmac_sha256_hex(&cfg.token_pepper, plaintext);
-
-    #[derive(sqlx::FromRow)]
-    struct SessionRow {
-        session_id: i64,
-        user_id: i64,
-        user_public_id: uuid::Uuid,
-        email: String,
-        sliding_expired: bool,
-        absolute_expired: bool,
-        status: String,
-        needs_refresh: bool,
-    }
 
     let row: Option<SessionRow> = sqlx::query_as(
         "SELECT s.id AS session_id, u.id AS user_id, u.public_id AS user_public_id, u.email,
@@ -156,7 +168,10 @@ pub async fn authenticate_session(
     }
 
     // Atomic in-place refresh — only the first concurrent request wins.
-    let updated: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
+    // Cast to bigint here — sqlx::query_scalar wants a single typed column;
+    // returning the timestamp directly works the same and we only care about
+    // "did the update fire" via Option::is_some().
+    let updated: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
         "UPDATE sessions
          SET expires_at = LEAST(NOW() + $1, absolute_expires_at),
              last_seen_at = NOW()
@@ -204,23 +219,23 @@ pub async fn delete_session(
     };
     let token_hash = hmac_sha256_hex(&cfg.token_pepper, plaintext);
 
-    let row: Option<(i64, i64)> =
+    let row: Option<DeletedSessionRow> =
         sqlx::query_as("DELETE FROM sessions WHERE session_token_hash = $1 RETURNING id, user_id")
             .bind(&token_hash)
             .fetch_optional(pool)
             .await?;
 
-    if let Some((session_id, user_id)) = row {
-        tracing::Span::current().record("session_id", session_id);
+    if let Some(DeletedSessionRow { id, user_id }) = row {
+        tracing::Span::current().record("session_id", id);
         tracing::Span::current().record("user_id", user_id);
         tracing::Span::current().record("outcome", "revoked");
         tracing::info!(outcome = "revoked", "session revoked");
         sink.on_event(SessionEvent::Revoked {
-            session_id: SessionId(session_id),
+            session_id: SessionId(id),
             user_id: UserId(user_id),
         })
         .await;
-        return Ok(Some((SessionId(session_id), UserId(user_id))));
+        return Ok(Some((SessionId(id), UserId(user_id))));
     }
     tracing::Span::current().record("outcome", "no_match");
     Ok(None)
@@ -258,7 +273,7 @@ pub async fn rotate_session(
     let new_token = SessionToken::generate();
     let new_hash = hmac_sha256_hex(&cfg.token_pepper, new_token.as_str());
 
-    let row: Option<(i64, i64, i64)> = sqlx::query_as(
+    let row: Option<RotatedSessionRow> = sqlx::query_as(
         "WITH src AS (
             SELECT id, user_id, absolute_expires_at, user_agent, ip
             FROM sessions WHERE session_token_hash = $1
@@ -275,7 +290,7 @@ pub async fn rotate_session(
             DELETE FROM sessions WHERE id = (SELECT id FROM src)
             RETURNING id, user_id
          )
-         SELECT del.id, ins.id, del.user_id FROM del, ins",
+         SELECT del.id AS old_id, ins.id AS new_id, del.user_id FROM del, ins",
     )
     .bind(&old_hash)
     .bind(&new_hash)
@@ -283,7 +298,11 @@ pub async fn rotate_session(
     .fetch_optional(pool)
     .await?;
 
-    let (old_id, new_id, user_id) = match row {
+    let RotatedSessionRow {
+        old_id,
+        new_id,
+        user_id,
+    } = match row {
         Some(r) => r,
         None => {
             tracing::Span::current().record("outcome", "stale_cookie");
@@ -311,8 +330,4 @@ pub async fn rotate_session(
     })
     .await;
     Ok(new_token)
-}
-
-fn to_interval(d: Duration) -> PgInterval {
-    PgInterval::try_from(d).expect("duration fits in PgInterval")
 }

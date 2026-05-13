@@ -79,6 +79,11 @@ impl std::fmt::Debug for Pepper {
 #[derive(Clone)]
 pub struct AuthConfig {
     pub(crate) cookie_name_suffix: String,
+    /// Pre-rendered `__Host-{suffix}` — avoids a `format!` on every cookie read.
+    pub(crate) cookie_name_full: String,
+    /// Pre-rendered `__Host-{suffix}=` — avoids a second `format!` on every
+    /// `extract_session_cookie_value` call (one per authenticated request).
+    pub(crate) cookie_name_with_eq: String,
     pub(crate) same_site: SameSite,
     pub(crate) session_sliding_ttl: Duration,
     pub(crate) session_absolute_ttl: Duration,
@@ -179,8 +184,15 @@ impl AuthConfig {
     }
 
     /// Final cookie name including __Host- prefix (always enforced).
-    pub fn cookie_name(&self) -> String {
-        format!("__Host-{}", self.cookie_name_suffix)
+    /// Pre-computed at builder time — borrowing it is alloc-free.
+    pub fn cookie_name(&self) -> &str {
+        &self.cookie_name_full
+    }
+
+    /// Same as [`cookie_name`] but with a trailing `=` — used by the cookie
+    /// extractor to match against `name=` prefixes without a per-call alloc.
+    pub(crate) fn cookie_name_with_eq(&self) -> &str {
+        &self.cookie_name_with_eq
     }
 
     /// Emit a `tracing::info!` event with all settings (excluding pepper / dyn traits).
@@ -462,8 +474,13 @@ impl AuthConfigBuilder {
             )));
         }
 
+        let cookie_name_full = format!("__Host-{cookie_name_suffix}");
+        let cookie_name_with_eq = format!("{cookie_name_full}=");
+
         Ok(AuthConfig {
             cookie_name_suffix,
+            cookie_name_full,
+            cookie_name_with_eq,
             same_site,
             session_sliding_ttl,
             session_absolute_ttl,
@@ -501,6 +518,22 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(cfg.cookie_name(), "__Host-session");
+    }
+
+    #[test]
+    fn cookie_name_precomputed_consistent_with_suffix() {
+        // Regression guard for P3: cookie name + cookie_name_with_eq must be
+        // pre-rendered consistently with the suffix and with each other.
+        let cfg = AuthConfig::builder_from_pepper(test_pepper())
+            .cookie_name_suffix("custom")
+            .build()
+            .unwrap();
+        assert_eq!(cfg.cookie_name(), "__Host-custom");
+        assert_eq!(cfg.cookie_name_with_eq(), "__Host-custom=");
+        // Clone must carry the precomputed values, not recompute them.
+        let cloned = cfg.clone();
+        assert_eq!(cloned.cookie_name(), "__Host-custom");
+        assert_eq!(cloned.cookie_name_with_eq(), "__Host-custom=");
     }
 
     #[test]
